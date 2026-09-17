@@ -1,0 +1,200 @@
+export const PAKISTAN_PROVINCES = [
+  "Punjab",
+  "Sindh",
+  "Khyber Pakhtunkhwa",
+  "Balochistan",
+  "Islamabad Capital Territory",
+  "Azad Jammu & Kashmir",
+  "Gilgit-Baltistan",
+] as const;
+
+export type PakistanProvince = (typeof PAKISTAN_PROVINCES)[number];
+
+export const PAKISTAN_CITIES_BY_PROVINCE: Record<string, string[]> = {
+  Punjab: [
+    "Lahore",
+    "Faisalabad",
+    "Rawalpindi",
+    "Gujranwala",
+    "Multan",
+    "Sialkot",
+    "Bahawalpur",
+    "Sargodha",
+    "Gujrat",
+    "Sheikhupura",
+    "Jhang",
+    "Sahiwal",
+    "Rahim Yar Khan",
+    "Kasur",
+    "Okara",
+    "Wah Cantt",
+    "Dera Ghazi Khan",
+    "Chiniot",
+    "Kamoke",
+    "Mandi Bahauddin",
+    "Jhelum",
+    "Khanewal",
+    "Hafizabad",
+    "Muzaffargarh",
+    "Khanpur",
+    "Gojra",
+    "Bahawalnagar",
+    "Muridke",
+    "Pakpattan",
+    "Chakwal",
+    "Vehari",
+    "Mianwali",
+    "Attock",
+    "Kot Addu",
+    "Burewala",
+    "Layyah",
+    "Toba Tek Singh",
+    "Kamalia",
+    "Ahmedpur East",
+    "Khushab",
+    "Wazirabad",
+    "Taxila",
+    "Mian Channu",
+    "Pattoki",
+    "Haroonabad",
+    "Bhalwal",
+    "Samundri",
+    "Jaranwala",
+    "Lodhran",
+    "Bhakkar",
+    "Arifwala",
+    "Shakargarh",
+  ],
+  Sindh: [
+    "Karachi",
+    "Hyderabad",
+    "Sukkur",
+    "Larkana",
+    "Nawabshah (Shaheed Benazirabad)",
+    "Mirpur Khas",
+    "Jacobabad",
+    "Shikarpur",
+    "Khairpur",
+    "Dadu",
+    "Tando Adam",
+    "Tando Allahyar",
+    "Badin",
+    "Thatta",
+    "Ghotki",
+    "Kotri",
+    "Umerkot",
+    "Kashmore",
+    "Moro",
+    "Shahdadkot",
+    "Kandiaro",
+    "Sanghar",
+    "Mirpur Mathelo",
+    "Rohri",
+    "Mehrabpur",
+  ],
+  "Khyber Pakhtunkhwa": [
+    "Peshawar",
+    "Mardan",
+    "Mingora (Swat)",
+    "Abbottabad",
+    "Kohat",
+    "Dera Ismail Khan",
+    "Mansehra",
+    "Swabi",
+    "Nowshera",
+    "Charsadda",
+    "Haripur",
+    "Bannu",
+    "Batkhela",
+    "Timargara",
+    "Karak",
+    "Hangu",
+    "Chitral",
+    "Dir",
+    "Tank",
+    "Risalpur",
+  ],
+  Balochistan: [
+    "Quetta",
+    "Turbat",
+    "Khuzdar",
+    "Hub",
+    "Gwadar",
+    "Chaman",
+    "Sibi",
+    "Zhob",
+    "Dera Murad Jamali",
+    "Usta Muhammad",
+    "Loralai",
+    "Nushki",
+    "Kharan",
+    "Panjgur",
+    "Pishin",
+    "Kalat",
+    "Mastung",
+  ],
+  "Islamabad Capital Territory": ["Islamabad"],
+  "Azad Jammu & Kashmir": [
+    "Muzaffarabad",
+    "Mirpur",
+    "Kotli",
+    "Rawalakot",
+    "Bhimber",
+    "Bagh",
+    "Palandri",
+    "Hattian Bala",
+    "Haveli",
+  ],
+  "Gilgit-Baltistan": [
+    "Gilgit",
+    "Skardu",
+    "Hunza",
+    "Chilas",
+    "Ghanche",
+    "Ghizer",
+    "Astore",
+    "Khaplu",
+  ],
+};
+
+export const ALL_PAKISTAN_CITIES: string[] = Array.from(
+  new Set(Object.values(PAKISTAN_CITIES_BY_PROVINCE).flat())
+).sort((a, b) => a.localeCompare(b));
+
+export const POPULAR_PAKISTAN_CITIES = [
+  "Karachi",
+  "Lahore",
+  "Islamabad",
+  "Rawalpindi",
+  "Faisalabad",
+  "Multan",
+  "Peshawar",
+  "Quetta",
+  "Gujranwala",
+  "Sialkot",
+  "Hyderabad",
+  "Bahawalpur",
+  "Sargodha",
+  "Abbottabad",
+  "Mirpur (AJK)",
+  "Sukkur",
+];
+
+export function cleanPakistanPhone(raw: string): string {
+  let cleaned = raw.replace(/[^\d+]/g, "").trim();
+  if (cleaned.startsWith("+92")) {
+    // e.g. +923001234567 -> 03001234567
+    cleaned = "0" + cleaned.slice(3);
+  } else if (cleaned.startsWith("923") && cleaned.length === 12) {
+    cleaned = "0" + cleaned.slice(2);
+  } else if (cleaned.startsWith("3") && cleaned.length === 10) {
+    cleaned = "0" + cleaned;
+  }
+  return cleaned;
+}
+
+export function isValidPakistanPhone(phone: string): boolean {
+  const cleaned = cleanPakistanPhone(phone);
+  return /^03\d{9}$/.test(cleaned);
+}
+
