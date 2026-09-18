@@ -2343,7 +2343,7 @@ export default function Admin() {
                 {section === "overview"
                   ? "Your daily view of orders, products and store performance."
                   : section === "orders"
-                    ? "Review test orders and manage their status."
+                    ? "Manage, verify, and fulfill orders with real-time CSR verification and courier tracking."
                     : section === "products"
                       ? "Create, edit and organise your storefront collection."
                       : section === "reviews"
