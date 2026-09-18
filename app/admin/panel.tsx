@@ -178,6 +178,7 @@ const sections = [
   { id: "settings", label: "Store settings", icon: SettingsIcon },
   { id: "reviews", label: "Reviews", icon: CheckCircle2, hidden: true },
 ];
+export type OrderMainTab = "overview" | "new_csr" | "fulfillment" | "shipping" | "completed" | "issues_returns";
 export const pipelineSteps = [
   { id: "Pending", label: "Placed", aliases: ["Pending", "Test order received"], icon: Check },
   { id: "Picklist", label: "Picklist", aliases: ["Picklist"], icon: Package },
@@ -608,6 +609,8 @@ export default function Admin() {
     [settingsSaved, setSettingsSaved] = useState(false),
     [logoPreviewTheme, setLogoPreviewTheme] = useState<"dark" | "light">("dark"),
     [activeSettingsTab, setActiveSettingsTab] = useState<"all" | "branding" | "shipping" | "support" | "checkout">("all"),
+    [orderMainTab, setOrderMainTab] = useState<OrderMainTab>("overview"),
+    [orderSubTab, setOrderSubTab] = useState<string>("all"),
     [csrOrder, setCsrOrder] = useState<Order | null>(null),
     [csrFilter, setCsrFilter] = useState<string>("all"),
     [csrTemplateTab, setCsrTemplateTab] = useState<"english" | "urdu" | "reminder" | "address">("urdu"),
@@ -809,10 +812,28 @@ export default function Admin() {
     window.addEventListener("product-delete", remove);
     return () => window.removeEventListener("product-delete", remove);
   }, [busy]);
-  function navigate(s: string) {
+  useEffect(() => {
+    if (!data?.role) return;
+    const r = data.role.toLowerCase();
+    if (r.includes("csr")) {
+      setOrderMainTab("new_csr");
+      setOrderSubTab("pending");
+    } else if (r.includes("warehouse") || r.includes("fulfillment")) {
+      setOrderMainTab("fulfillment");
+      setOrderSubTab("confirmed");
+    } else if (r.includes("shipping")) {
+      setOrderMainTab("shipping");
+      setOrderSubTab("ready_to_ship");
+    } else {
+      setOrderMainTab("overview");
+      setOrderSubTab("all");
+    }
+  }, [data?.role]);
+
+  function navigate(s: string, orderFilterStatus?: string) {
     setSection(s);
     setQuery("");
-    setFilter("All");
+    setFilter("All statuses");
     setCsrFilter("all");
     setDateFilter("all");
     setCityFilter("all");
@@ -823,6 +844,28 @@ export default function Admin() {
     setStockFilter("");
     setSaveError("");
     setSettingsSaved(false);
+
+    if (s === "orders") {
+      if (orderFilterStatus === "Pending") {
+        setOrderMainTab("new_csr");
+        setOrderSubTab("pending");
+      } else if (orderFilterStatus === "Picklist") {
+        setOrderMainTab("fulfillment");
+        setOrderSubTab("picklist");
+      } else if (orderFilterStatus === "Pack & AirwayBill" || orderFilterStatus === "Processing") {
+        setOrderMainTab("fulfillment");
+        setOrderSubTab("packing");
+      } else if (orderFilterStatus === "Shipped" || orderFilterStatus === "Dispatched") {
+        setOrderMainTab("shipping");
+        setOrderSubTab("shipped");
+      } else if (orderFilterStatus === "Delivered") {
+        setOrderMainTab("completed");
+        setOrderSubTab("delivered");
+      } else {
+        setOrderMainTab("overview");
+        setOrderSubTab("all");
+      }
+    }
   }
   async function write(payload: unknown) {
     setBusy(true);
@@ -942,94 +985,155 @@ export default function Admin() {
   );
   const uniqueCities = Array.from(new Set(orders.map((o) => o.details.city).filter(Boolean))).sort();
 
+  const isOrderNeedsAttention = (o: Order) => {
+    if (o.status === "Delivered") return false;
+    if (o.status === "Cancelled" && o.details.csrStatus === "Cancelled by Customer") return false;
+    // 1. CSR Pending or Callback or No Answer
+    if (!o.details.csrStatus || o.details.csrStatus === "Pending" || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")) return true;
+    // 2. Address Problem
+    if (o.details.csrStatus === "Address Incomplete" || (o.details.address || "").trim().length < 8) return true;
+    // 3. Failed delivery
+    if (o.status === "Failed Delivery" || o.details.courierStatus === "Failed Delivery") return true;
+    // 4. Return requested
+    if (o.status === "Return Requested" || o.details.returnStatus === "Requested") return true;
+    // 5. On Hold
+    if (o.status === "On Hold") return true;
+    // 6. High RTO risk
+    if (o.details.rtoRisk === "high") return true;
+    return false;
+  };
+
   const filteredOrders = orders.filter((o) => {
-    // 1. Primary Operational Tabs Matching
-    let matchesStatus = true;
-    if (filter === "New") {
-      matchesStatus = ["Pending", "Test order received", "New", "Placed"].includes(o.status);
-    } else if (filter === "Picklist") {
-      matchesStatus = o.status === "Picklist";
-    } else if (filter === "Packing") {
-      matchesStatus = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status);
-    } else if (filter === "Shipped") {
-      matchesStatus = ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status);
-    } else if (filter === "Delivered") {
-      matchesStatus = o.status === "Delivered";
-    } else if (filter === "Cancelled") {
-      matchesStatus = o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer";
-    } else if (filter === "Returns / RTO") {
-      matchesStatus = ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status) || o.details.rtoRisk === "high";
-    } else if (filter !== "All" && filter !== "All statuses") {
-      matchesStatus =
-        o.status === filter ||
-        (filter === "Pending" && o.status === "Test order received") ||
-        (filter === "Pack & AirwayBill" && o.status === "Processing") ||
-        (filter === "Shipped" && o.status === "Dispatched");
+    // 1. Two-Tier Tab Filtering
+    let matchesTab = true;
+    if (orderMainTab === "overview") {
+      if (orderSubTab === "needs_attention") {
+        matchesTab = isOrderNeedsAttention(o);
+      } else if (orderSubTab === "today") {
+        if (!o.created_at) matchesTab = false;
+        else {
+          const orderDate = new Date(o.created_at);
+          matchesTab = orderDate.toDateString() === new Date().toDateString();
+        }
+      } else {
+        matchesTab = true;
+      }
+    } else if (orderMainTab === "new_csr") {
+      const cStatus = o.details.csrStatus || "Pending";
+      if (orderSubTab === "pending") {
+        matchesTab = (cStatus === "Pending" || !o.details.csrStatus) && o.status !== "Cancelled";
+      } else if (orderSubTab === "callback") {
+        matchesTab = cStatus === "Callback Requested";
+      } else if (orderSubTab === "no_answer") {
+        matchesTab = cStatus.startsWith("No Answer");
+      } else if (orderSubTab === "whatsapp") {
+        matchesTab = cStatus === "WhatsApp Sent";
+      } else if (orderSubTab === "confirmed") {
+        matchesTab = cStatus === "Confirmed";
+      } else if (orderSubTab === "cancelled") {
+        matchesTab = cStatus === "Cancelled by Customer" || o.status === "Cancelled";
+      } else {
+        matchesTab = true;
+      }
+    } else if (orderMainTab === "fulfillment") {
+      if (orderSubTab === "confirmed") {
+        matchesTab = o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status);
+      } else if (orderSubTab === "picklist") {
+        matchesTab = o.status === "Picklist";
+      } else if (orderSubTab === "packing") {
+        matchesTab = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status) && !o.details.trackingNumber;
+      } else if (orderSubTab === "ready_to_ship") {
+        matchesTab = (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber) || o.status === "Ready to Ship";
+      } else {
+        matchesTab = o.status === "Picklist" || ["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) || (o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status));
+      }
+    } else if (orderMainTab === "shipping") {
+      if (orderSubTab === "ready_to_ship") {
+        matchesTab = (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber) || o.status === "Ready to Ship";
+      } else if (orderSubTab === "shipped") {
+        matchesTab = ["Shipped", "Dispatched"].includes(o.status);
+      } else if (orderSubTab === "in_transit") {
+        matchesTab = ["Shipped", "Dispatched", "In Transit"].includes(o.status) || o.details.courierStatus === "In Transit";
+      } else if (orderSubTab === "out_for_delivery") {
+        matchesTab = o.status === "Out for Delivery" || o.details.courierStatus === "Out for Delivery";
+      } else if (orderSubTab === "failed_delivery") {
+        matchesTab = o.status === "Failed Delivery" || o.details.courierStatus === "Failed Delivery";
+      } else {
+        matchesTab = ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) || (["Pack & AirwayBill", "Packing", "Processing"].includes(o.status) && !!o.details.trackingNumber);
+      }
+    } else if (orderMainTab === "completed") {
+      if (orderSubTab === "delivered") {
+        matchesTab = o.status === "Delivered";
+      } else if (orderSubTab === "cod_pending") {
+        matchesTab = (o.status === "Delivered" && !o.details.codCollected) || (o.status !== "Cancelled" && o.status !== "Delivered");
+      } else if (orderSubTab === "cod_collected") {
+        matchesTab = o.status === "Delivered" && (o.details.codCollected === true || o.details.paymentStatus === "Paid");
+      } else {
+        matchesTab = o.status === "Delivered";
+      }
+    } else if (orderMainTab === "issues_returns") {
+      if (orderSubTab === "on_hold") {
+        matchesTab = o.status === "On Hold";
+      } else if (orderSubTab === "cancelled") {
+        matchesTab = o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer";
+      } else if (orderSubTab === "failed_delivery") {
+        matchesTab = o.status === "Failed Delivery" || o.details.courierStatus === "Failed Delivery";
+      } else if (orderSubTab === "return_requested") {
+        matchesTab = o.status === "Return Requested" || o.details.returnStatus === "Requested";
+      } else if (orderSubTab === "returned") {
+        matchesTab = o.status === "Returned" || o.details.returnStatus === "Returned";
+      } else if (orderSubTab === "rto") {
+        matchesTab = o.status === "RTO" || o.details.courierStatus === "RTO" || o.details.rtoRisk === "high";
+      } else if (orderSubTab === "refunds") {
+        matchesTab = o.status === "Refunded" || o.details.paymentStatus === "Refunded";
+      } else {
+        matchesTab = ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) || o.details.rtoRisk === "high" || o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer" || o.details.returnStatus === "Requested";
+      }
     }
 
-    // 2. CSR Secondary Filter Matching
-    const cStatus = o.details.csrStatus || "Pending";
-    let matchesCsr = true;
-    if (csrFilter === "pending") {
-      matchesCsr = cStatus === "Pending" || !o.details.csrStatus;
-    } else if (csrFilter === "confirmed") {
-      matchesCsr = cStatus === "Confirmed";
-    } else if (csrFilter === "no-answer") {
-      matchesCsr = cStatus.startsWith("No Answer");
-    } else if (csrFilter === "callback") {
-      matchesCsr = cStatus === "Callback Requested";
-    } else if (csrFilter === "whatsapp") {
-      matchesCsr = cStatus === "WhatsApp Sent";
-    } else if (csrFilter === "cancelled") {
-      matchesCsr = cStatus === "Cancelled by Customer" || o.status === "Cancelled";
-    }
+    if (!matchesTab) return false;
 
-    // 3. Date Filter Matching
-    let matchesDate = true;
+    // 2. Date Filter Matching
     if (dateFilter !== "all" && o.created_at) {
       const orderDate = new Date(o.created_at);
       const now = new Date();
       if (dateFilter === "today") {
-        matchesDate = orderDate.toDateString() === now.toDateString();
+        if (orderDate.toDateString() !== now.toDateString()) return false;
       } else if (dateFilter === "yesterday") {
         const yesterday = new Date(now);
         yesterday.setDate(yesterday.getDate() - 1);
-        matchesDate = orderDate.toDateString() === yesterday.toDateString();
+        if (orderDate.toDateString() !== yesterday.toDateString()) return false;
       } else if (dateFilter === "7days") {
         const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        matchesDate = orderDate >= sevenDaysAgo;
+        if (orderDate < sevenDaysAgo) return false;
       } else if (dateFilter === "30days") {
         const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-        matchesDate = orderDate >= thirtyDaysAgo;
+        if (orderDate < thirtyDaysAgo) return false;
       }
     }
 
-    // 4. City Filter Matching
-    let matchesCity = true;
+    // 3. City Filter Matching
     if (cityFilter !== "all") {
-      matchesCity = (o.details.city || "").toLowerCase() === cityFilter.toLowerCase();
+      if ((o.details.city || "").toLowerCase() !== cityFilter.toLowerCase()) return false;
     }
 
-    // 5. Courier Filter Matching
-    let matchesCourier = true;
+    // 4. Courier Filter Matching
     if (courierFilter !== "all") {
       const cour = (o.details.courier || "").toLowerCase();
-      matchesCourier = cour.includes(courierFilter.toLowerCase());
+      if (!cour.includes(courierFilter.toLowerCase())) return false;
     }
 
-    // 6. RTO Risk Filter Matching
-    let matchesRtoRisk = true;
+    // 5. RTO Risk Filter Matching
     if (rtoRiskFilter === "high") {
-      matchesRtoRisk = o.details.rtoRisk === "high" || ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status);
+      if (o.details.rtoRisk !== "high" && !["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status)) return false;
     } else if (rtoRiskFilter === "normal") {
-      matchesRtoRisk = o.details.rtoRisk !== "high" && !["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status);
+      if (o.details.rtoRisk === "high" || ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status)) return false;
     }
 
-    // 7. Universal Query Search
+    // 6. Universal Query Search
     const q = query.toLowerCase().trim();
-    const matchesQuery =
-      !q ||
-      (
+    if (q) {
+      const haystack = (
         o.id +
         " " +
         o.details.name +
@@ -1057,11 +1161,11 @@ export default function Admin() {
         (o.details.note || "") +
         " " +
         o.items.map((i) => (i.name || "") + " " + (i.sku || "") + " " + (i.color || "") + " " + (i.size || "")).join(" ")
-      )
-        .toLowerCase()
-        .includes(q);
+      ).toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
 
-    return matchesStatus && matchesCsr && matchesDate && matchesCity && matchesCourier && matchesRtoRisk && matchesQuery;
+    return true;
   });
   const filteredProducts = products.filter((p) => {
     const matchesStatus = filter === "All statuses" || p.status === filter;
@@ -1300,8 +1404,10 @@ export default function Admin() {
           const isPlaced = ["Pending", "Test order received", "New", "Placed"].includes(o.status);
           const isPicklist = o.status === "Picklist";
           const isPacking = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status);
-          const isShipped = ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status);
+          const isShipped = ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status);
           const isDelivered = o.status === "Delivered";
+          const isFailedDelivery = o.status === "Failed Delivery" || o.details.courierStatus === "Failed Delivery";
+          const isReturnRequested = o.status === "Return Requested" || o.details.returnStatus === "Requested";
 
           const trackingUrl = getCourierTrackingUrl(o.details.courier, o.details.trackingNumber);
           const customerHistory = getCustomerHistory(orders, o.details.phone, o.id);
@@ -1643,6 +1749,32 @@ export default function Admin() {
                       >
                         <RotateCcw size={13} /> Reactivate Order
                       </button>
+                    ) : isReturnRequested ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn review-return"
+                        onClick={() => {
+                          setSelected(o);
+                          setStatus(o.status);
+                          setSaveError("");
+                        }}
+                        title="Review customer return request and process resolution"
+                      >
+                        <RotateCcw size={13} /> Review Return
+                      </button>
+                    ) : isFailedDelivery ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn resolve-delivery"
+                        onClick={() => {
+                          setCourierOrder(o);
+                          setCourierName(o.details.courier || "Trax Logistics");
+                          setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
+                        }}
+                        title="Resolve courier delivery issue or re-dispatch package"
+                      >
+                        <AlertTriangle size={13} /> Resolve Delivery
+                      </button>
                     ) : !isCsrConfirmed ? (
                       <button
                         type="button"
@@ -1742,24 +1874,37 @@ export default function Admin() {
                         </div>
                       )
                     ) : isShipped ? (
-                      <button
-                        type="button"
-                        className="order-primary-btn delivered"
-                        disabled={busy}
-                        onClick={async () => {
-                          const ok = await write({ action: "order", id: o.id, status: "Delivered" });
-                          if (ok) {
-                            setData((curr) => curr ? {
-                              ...curr,
-                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Delivered" } : item)
-                            } : curr);
-                            toast.success(`Order ${o.id} marked as Delivered!`);
-                          }
-                        }}
-                        title="Confirm parcel delivery & COD cash collection"
-                      >
-                        <CheckCircle2 size={14} /> Mark Delivered
-                      </button>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+                        <button
+                          type="button"
+                          className="order-primary-btn delivered"
+                          disabled={busy}
+                          onClick={async () => {
+                            const ok = await write({ action: "order", id: o.id, status: "Delivered" });
+                            if (ok) {
+                              setData((curr) => curr ? {
+                                ...curr,
+                                orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Delivered" } : item)
+                              } : curr);
+                              toast.success(`Order ${o.id} marked as Delivered!`);
+                            }
+                          }}
+                          title="Confirm parcel delivery & COD cash collection"
+                        >
+                          <CheckCircle2 size={14} /> Mark Delivered
+                        </button>
+                        {trackingUrl && trackingUrl !== "#" && (
+                          <a
+                            href={trackingUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ fontSize: 11, color: "#2563eb", textAlign: "center", textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 3, marginTop: 2 }}
+                            title="Open courier shipment tracking"
+                          >
+                            Track Shipment <ExternalLink size={10} />
+                          </a>
+                        )}
+                      </div>
                     ) : isDelivered ? (
                       <div className="order-delivered-pill">
                         <CheckCircle2 size={14} /> Delivered & Collected
@@ -2138,12 +2283,12 @@ export default function Admin() {
                 {section === "categories" && <Categories onChange={(categories) => setData((current) => current ? { ...current, categories } : current)} />}
                 {section === "orders" && (
                   <div className="admin-card">
-                    {/* Live Clickable Order KPI Summary Strip */}
+                    {/* Live Clickable 6 Top Order KPI Summary Cards */}
                     <div className="order-kpi-strip">
                       <button
                         type="button"
-                        className={`order-kpi-pill ${filter === "All" && csrFilter === "all" ? "active" : ""}`}
-                        onClick={() => { setFilter("All"); setCsrFilter("all"); }}
+                        className={`order-kpi-pill ${orderMainTab === "overview" && orderSubTab === "all" ? "active" : ""}`}
+                        onClick={() => { setOrderMainTab("overview"); setOrderSubTab("all"); }}
                       >
                         <span>📦 Total Orders:</span>
                         <span className="order-kpi-count">{orders.length}</span>
@@ -2151,74 +2296,94 @@ export default function Admin() {
 
                       <button
                         type="button"
-                        className={`order-kpi-pill ${csrFilter === "pending" ? "active" : ""}`}
-                        onClick={() => { setFilter("All"); setCsrFilter("pending"); }}
-                        style={{ borderColor: "#fde047", background: csrFilter === "pending" ? "#fefce8" : undefined }}
+                        className={`order-kpi-pill ${orderMainTab === "new_csr" && orderSubTab === "pending" ? "active" : ""}`}
+                        onClick={() => { setOrderMainTab("new_csr"); setOrderSubTab("pending"); }}
+                        style={{ borderColor: "#fde047", background: orderMainTab === "new_csr" && orderSubTab === "pending" ? "#fefce8" : undefined }}
                       >
                         <span>🟡 Needs CSR Call:</span>
                         <span className="order-kpi-count" style={{ color: "#ca8a04" }}>
-                          {orders.filter((o) => !o.details.csrStatus || o.details.csrStatus === "Pending").length}
+                          {orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending") && o.status !== "Cancelled").length}
                         </span>
                       </button>
 
                       <button
                         type="button"
-                        className={`order-kpi-pill ${csrFilter === "confirmed" ? "active" : ""}`}
-                        onClick={() => { setFilter("All"); setCsrFilter("confirmed"); }}
-                        style={{ borderColor: "#86efac", background: csrFilter === "confirmed" ? "#f0fdf4" : undefined }}
+                        className={`order-kpi-pill ${orderMainTab === "fulfillment" && orderSubTab === "ready_to_ship" ? "active" : ""}`}
+                        onClick={() => { setOrderMainTab("fulfillment"); setOrderSubTab("ready_to_ship"); }}
+                        style={{ borderColor: "#86efac", background: orderMainTab === "fulfillment" && orderSubTab === "ready_to_ship" ? "#f0fdf4" : undefined }}
                       >
-                        <span>🟢 CSR Verified:</span>
+                        <span>📦 Ready to Ship:</span>
                         <span className="order-kpi-count" style={{ color: "#16a34a" }}>
-                          {orders.filter((o) => o.details.csrStatus === "Confirmed").length}
+                          {orders.filter((o) => (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber) || o.status === "Ready to Ship").length}
                         </span>
                       </button>
 
                       <button
                         type="button"
-                        className={`order-kpi-pill ${filter === "Picklist" ? "active" : ""}`}
-                        onClick={() => { setFilter("Picklist"); setCsrFilter("all"); }}
-                      >
-                        <span>📋 In Picklist:</span>
-                        <span className="order-kpi-count">{orders.filter((o) => o.status === "Picklist").length}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className={`order-kpi-pill ${filter === "Shipped" ? "active" : ""}`}
-                        onClick={() => { setFilter("Shipped"); setCsrFilter("all"); }}
-                        style={{ borderColor: "#93c5fd", background: filter === "Shipped" ? "#eff6ff" : undefined }}
+                        className={`order-kpi-pill ${orderMainTab === "shipping" && orderSubTab === "shipped" ? "active" : ""}`}
+                        onClick={() => { setOrderMainTab("shipping"); setOrderSubTab("shipped"); }}
+                        style={{ borderColor: "#93c5fd", background: orderMainTab === "shipping" && orderSubTab === "shipped" ? "#eff6ff" : undefined }}
                       >
                         <span>🚚 Shipped:</span>
                         <span className="order-kpi-count" style={{ color: "#2563eb" }}>
-                          {orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status)).length}
+                          {orders.filter((o) => ["Shipped", "Dispatched", "In Transit", "Out for Delivery"].includes(o.status)).length}
                         </span>
                       </button>
 
-                      <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: "#0f172a", background: "#f8fafc", padding: "6px 14px", borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                        <span style={{ color: "#64748b", fontWeight: 500 }}>💰 Pending COD Collection:</span>
-                        <span style={{ color: "#059669", fontWeight: 800 }}>
+                      <button
+                        type="button"
+                        className={`order-kpi-pill ${orderMainTab === "completed" && orderSubTab === "delivered" ? "active" : ""}`}
+                        onClick={() => { setOrderMainTab("completed"); setOrderSubTab("delivered"); }}
+                        style={{ borderColor: "#c4b5fd", background: orderMainTab === "completed" && orderSubTab === "delivered" ? "#f5f3ff" : undefined }}
+                      >
+                        <span>✅ Delivered:</span>
+                        <span className="order-kpi-count" style={{ color: "#7c3aed" }}>
+                          {orders.filter((o) => o.status === "Delivered").length}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`order-kpi-pill ${orderMainTab === "completed" && orderSubTab === "cod_pending" ? "active" : ""}`}
+                        onClick={() => { setOrderMainTab("completed"); setOrderSubTab("cod_pending"); }}
+                        style={{ marginLeft: "auto", background: orderMainTab === "completed" && orderSubTab === "cod_pending" ? "#f8fafc" : undefined }}
+                      >
+                        <span style={{ color: "#64748b", fontWeight: 600 }}>💰 Pending COD:</span>
+                        <span className="order-kpi-count" style={{ color: "#059669" }}>
                           {money(orders.filter((o) => o.status !== "Cancelled" && o.status !== "Delivered").reduce((sum, o) => sum + (o.total || 0), 0))}
                         </span>
-                      </div>
+                      </button>
                     </div>
 
-                    {/* 8 Primary Operational Order Navigation Tabs */}
-                    <div className="order-status-tabs">
+                    {/* Tier 1 Main Orders Tabs */}
+                    <div className="orders-main-tabs">
                       {[
-                        { id: "All", label: "All", count: orders.length },
-                        { id: "New", label: "New", count: orders.filter((o) => ["Pending", "Test order received", "New", "Placed"].includes(o.status)).length },
-                        { id: "Picklist", label: "Picklist", count: orders.filter((o) => o.status === "Picklist").length },
-                        { id: "Packing", label: "Packing", count: orders.filter((o) => ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status)).length },
-                        { id: "Shipped", label: "Shipped", count: orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status)).length },
-                        { id: "Delivered", label: "Delivered", count: orders.filter((o) => o.status === "Delivered").length },
-                        { id: "Cancelled", label: "Cancelled", count: orders.filter((o) => o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer").length },
-                        { id: "Returns / RTO", label: "Returns / RTO", count: orders.filter((o) => ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status) || o.details.rtoRisk === "high").length },
+                        { id: "overview" as OrderMainTab, label: "Overview", count: orders.length },
+                        { id: "new_csr" as OrderMainTab, label: "New & CSR", count: orders.filter((o) => ["Pending", "Test order received", "New", "Placed"].includes(o.status) || (!o.details.csrStatus || o.details.csrStatus === "Pending") || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")).length },
+                        { id: "fulfillment" as OrderMainTab, label: "Fulfillment", count: orders.filter((o) => o.status === "Picklist" || ["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) || (o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status))).length },
+                        { id: "shipping" as OrderMainTab, label: "Shipping", count: orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) || (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber)).length },
+                        { id: "completed" as OrderMainTab, label: "Completed", count: orders.filter((o) => o.status === "Delivered").length },
+                        { id: "issues_returns" as OrderMainTab, label: "Issues & Returns", count: orders.filter((o) => ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) || o.details.rtoRisk === "high" || o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer" || o.details.returnStatus === "Requested").length },
                       ].map((tab) => (
                         <button
                           key={tab.id}
                           type="button"
-                          className={`order-status-tab ${filter === tab.id ? "active" : ""}`}
-                          onClick={() => setFilter(tab.id)}
+                          className={`orders-main-tab ${orderMainTab === tab.id ? "active" : ""}`}
+                          onClick={() => {
+                            setOrderMainTab(tab.id);
+                            const currentSubs: Record<OrderMainTab, string[]> = {
+                              overview: ["all", "needs_attention", "today"],
+                              new_csr: ["all", "pending", "callback", "no_answer", "whatsapp", "confirmed", "cancelled"],
+                              fulfillment: ["confirmed", "picklist", "packing", "ready_to_ship"],
+                              shipping: ["ready_to_ship", "shipped", "in_transit", "out_for_delivery", "failed_delivery"],
+                              completed: ["delivered", "cod_pending", "cod_collected"],
+                              issues_returns: ["on_hold", "cancelled", "failed_delivery", "return_requested", "returned", "rto", "refunds"],
+                            };
+                            const available = currentSubs[tab.id];
+                            if (available && !available.includes(orderSubTab)) {
+                              setOrderSubTab(available[0]);
+                            }
+                          }}
                         >
                           {tab.label}
                           <span className="badge">{tab.count}</span>
@@ -2226,26 +2391,112 @@ export default function Admin() {
                       ))}
                     </div>
 
-                    {/* Secondary CSR Sub-Bar */}
-                    <div className="csr-filter-bar">
-                      <span>CSR Sub-Filter:</span>
-                      {[
-                        { id: "all", label: "All", count: orders.length },
-                        { id: "pending", label: "🟡 Pending Call", count: orders.filter((o) => !o.details.csrStatus || o.details.csrStatus === "Pending").length },
-                        { id: "confirmed", label: "🟢 Confirmed", count: orders.filter((o) => o.details.csrStatus === "Confirmed").length },
-                        { id: "no-answer", label: "🟠 No Answer", count: orders.filter((o) => o.details.csrStatus?.startsWith("No Answer")).length },
-                        { id: "callback", label: "🔵 Callback", count: orders.filter((o) => o.details.csrStatus === "Callback Requested").length },
-                        { id: "whatsapp", label: "🟣 WhatsApp Sent", count: orders.filter((o) => o.details.csrStatus === "WhatsApp Sent").length },
-                        { id: "cancelled", label: "⚫ Cancelled", count: orders.filter((o) => o.details.csrStatus === "Cancelled by Customer" || o.status === "Cancelled").length },
-                      ].map((item) => (
+                    {/* Tier 2 Secondary Sub-Tabs (Dynamic based on selected main tab) */}
+                    <div className="orders-sub-tabs">
+                      {orderMainTab === "overview" && [
+                        { id: "all", label: "All Orders", count: orders.length },
+                        { id: "needs_attention", label: "⚠️ Needs Attention", count: orders.filter(isOrderNeedsAttention).length },
+                        { id: "today", label: "📅 Today's Orders", count: orders.filter((o) => o.created_at && new Date(o.created_at).toDateString() === new Date().toDateString()).length },
+                      ].map((sub) => (
                         <button
-                          key={item.id}
+                          key={sub.id}
                           type="button"
-                          className={`csr-filter-btn ${csrFilter === item.id ? "active" : ""}`}
-                          onClick={() => setCsrFilter(item.id)}
+                          className={`orders-sub-tab ${orderSubTab === sub.id ? "active" : ""}`}
+                          onClick={() => setOrderSubTab(sub.id)}
                         >
-                          {item.label}
-                          <span className="badge">{item.count}</span>
+                          {sub.label}
+                          <span className="badge">{sub.count}</span>
+                        </button>
+                      ))}
+
+                      {orderMainTab === "new_csr" && [
+                        { id: "all", label: "All", count: orders.length },
+                        { id: "pending", label: "🟡 Pending Call", count: orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending") && o.status !== "Cancelled").length },
+                        { id: "callback", label: "🔵 Callback", count: orders.filter((o) => o.details.csrStatus === "Callback Requested").length },
+                        { id: "no_answer", label: "🟠 No Answer", count: orders.filter((o) => o.details.csrStatus?.startsWith("No Answer")).length },
+                        { id: "whatsapp", label: "🟣 WhatsApp Sent", count: orders.filter((o) => o.details.csrStatus === "WhatsApp Sent").length },
+                        { id: "confirmed", label: "🟢 Confirmed", count: orders.filter((o) => o.details.csrStatus === "Confirmed").length },
+                        { id: "cancelled", label: "⚫ Cancelled", count: orders.filter((o) => o.details.csrStatus === "Cancelled by Customer" || o.status === "Cancelled").length },
+                      ].map((sub) => (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          className={`orders-sub-tab ${orderSubTab === sub.id ? "active" : ""}`}
+                          onClick={() => setOrderSubTab(sub.id)}
+                        >
+                          {sub.label}
+                          <span className="badge">{sub.count}</span>
+                        </button>
+                      ))}
+
+                      {orderMainTab === "fulfillment" && [
+                        { id: "confirmed", label: "Confirmed (Ready for Picklist)", count: orders.filter((o) => o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status)).length },
+                        { id: "picklist", label: "Picklist", count: orders.filter((o) => o.status === "Picklist").length },
+                        { id: "packing", label: "Packing", count: orders.filter((o) => ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status) && !o.details.trackingNumber).length },
+                        { id: "ready_to_ship", label: "Ready to Ship", count: orders.filter((o) => (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber) || o.status === "Ready to Ship").length },
+                      ].map((sub) => (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          className={`orders-sub-tab ${orderSubTab === sub.id ? "active" : ""}`}
+                          onClick={() => setOrderSubTab(sub.id)}
+                        >
+                          {sub.label}
+                          <span className="badge">{sub.count}</span>
+                        </button>
+                      ))}
+
+                      {orderMainTab === "shipping" && [
+                        { id: "ready_to_ship", label: "Ready to Ship", count: orders.filter((o) => (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber) || o.status === "Ready to Ship").length },
+                        { id: "shipped", label: "Shipped", count: orders.filter((o) => ["Shipped", "Dispatched"].includes(o.status)).length },
+                        { id: "in_transit", label: "In Transit", count: orders.filter((o) => ["Shipped", "Dispatched", "In Transit"].includes(o.status) || o.details.courierStatus === "In Transit").length },
+                        { id: "out_for_delivery", label: "Out for Delivery", count: orders.filter((o) => o.status === "Out for Delivery" || o.details.courierStatus === "Out for Delivery").length },
+                        { id: "failed_delivery", label: "Failed Delivery", count: orders.filter((o) => o.status === "Failed Delivery" || o.details.courierStatus === "Failed Delivery").length },
+                      ].map((sub) => (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          className={`orders-sub-tab ${orderSubTab === sub.id ? "active" : ""}`}
+                          onClick={() => setOrderSubTab(sub.id)}
+                        >
+                          {sub.label}
+                          <span className="badge">{sub.count}</span>
+                        </button>
+                      ))}
+
+                      {orderMainTab === "completed" && [
+                        { id: "delivered", label: "Delivered", count: orders.filter((o) => o.status === "Delivered").length },
+                        { id: "cod_pending", label: "COD Pending", count: orders.filter((o) => (o.status === "Delivered" && !o.details.codCollected) || (o.status !== "Cancelled" && o.status !== "Delivered")).length },
+                        { id: "cod_collected", label: "COD Collected", count: orders.filter((o) => o.status === "Delivered" && (o.details.codCollected === true || o.details.paymentStatus === "Paid")).length },
+                      ].map((sub) => (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          className={`orders-sub-tab ${orderSubTab === sub.id ? "active" : ""}`}
+                          onClick={() => setOrderSubTab(sub.id)}
+                        >
+                          {sub.label}
+                          <span className="badge">{sub.count}</span>
+                        </button>
+                      ))}
+
+                      {orderMainTab === "issues_returns" && [
+                        { id: "on_hold", label: "On Hold", count: orders.filter((o) => o.status === "On Hold").length },
+                        { id: "cancelled", label: "Cancelled", count: orders.filter((o) => o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer").length },
+                        { id: "failed_delivery", label: "Failed Delivery", count: orders.filter((o) => o.status === "Failed Delivery" || o.details.courierStatus === "Failed Delivery").length },
+                        { id: "return_requested", label: "Return Requested", count: orders.filter((o) => o.status === "Return Requested" || o.details.returnStatus === "Requested").length },
+                        { id: "returned", label: "Returned", count: orders.filter((o) => o.status === "Returned" || o.details.returnStatus === "Returned").length },
+                        { id: "rto", label: "RTO", count: orders.filter((o) => o.status === "RTO" || o.details.courierStatus === "RTO" || o.details.rtoRisk === "high").length },
+                        { id: "refunds", label: "Refunds", count: orders.filter((o) => o.status === "Refunded" || o.details.paymentStatus === "Refunded").length },
+                      ].map((sub) => (
+                        <button
+                          key={sub.id}
+                          type="button"
+                          className={`orders-sub-tab ${orderSubTab === sub.id ? "active" : ""}`}
+                          onClick={() => setOrderSubTab(sub.id)}
+                        >
+                          {sub.label}
+                          <span className="badge">{sub.count}</span>
                         </button>
                       ))}
                     </div>
@@ -2287,15 +2538,15 @@ export default function Admin() {
                           <ChevronDown size={14} style={{ transform: advancedFiltersOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
                         </button>
 
-                        {(query || dateFilter !== "all" || cityFilter !== "all" || courierFilter !== "all" || rtoRiskFilter !== "all" || filter !== "All" || csrFilter !== "all") && (
+                        {(query || dateFilter !== "all" || cityFilter !== "all" || courierFilter !== "all" || rtoRiskFilter !== "all" || orderMainTab !== "overview" || orderSubTab !== "all") && (
                           <button
                             type="button"
                             className="admin-secondary"
                             style={{ padding: "8px 12px", fontSize: 12, color: "#dc2626", borderColor: "#fca5a5" }}
                             onClick={() => {
                               setQuery("");
-                              setFilter("All");
-                              setCsrFilter("all");
+                              setOrderMainTab("overview");
+                              setOrderSubTab("all");
                               setDateFilter("all");
                               setCityFilter("all");
                               setCourierFilter("all");
@@ -2482,8 +2733,8 @@ export default function Admin() {
                           className="admin-secondary"
                           onClick={() => {
                             setQuery("");
-                            setFilter("All");
-                            setCsrFilter("all");
+                            setOrderMainTab("overview");
+                            setOrderSubTab("all");
                             setDateFilter("all");
                             setCityFilter("all");
                             setCourierFilter("all");
