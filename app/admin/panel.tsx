@@ -222,6 +222,25 @@ export function getCourierTrackingUrl(courier?: string, trackingNumber?: string)
   return `https://www.google.com/search?q=${encodeURIComponent((courier || "courier") + " tracking " + cleanCn)}`;
 }
 
+export function timeAgo(dateInput?: string | Date) {
+  if (!dateInput) return "";
+  const date = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+  if (isNaN(date.getTime())) return "";
+  const now = new Date();
+  const diffInSeconds = Math.max(0, Math.floor((now.getTime() - date.getTime()) / 1000));
+
+  if (diffInSeconds < 45) return "Just now";
+  const diffInMinutes = Math.floor(diffInSeconds / 60);
+  if (diffInMinutes < 60) return `${diffInMinutes} min${diffInMinutes > 1 ? "s" : ""} ago`;
+  const diffInHours = Math.floor(diffInMinutes / 60);
+  if (diffInHours < 24) return `${diffInHours} hr${diffInHours > 1 ? "s" : ""} ago`;
+  const diffInDays = Math.floor(diffInHours / 24);
+  if (diffInDays === 1) return "1 day ago";
+  if (diffInDays < 30) return `${diffInDays} days ago`;
+  const diffInMonths = Math.floor(diffInDays / 30);
+  return `${diffInMonths} mo${diffInMonths > 1 ? "s" : ""} ago`;
+}
+
 export function getCustomerHistory(orders: Order[], phone?: string, currentOrderId?: string) {
   if (!phone) return { count: 1, deliveredCount: 0, rtoCount: 0, isFirstOrder: true };
   const clean = phone.replace(/[^0-9]/g, "").slice(-10);
@@ -1626,22 +1645,20 @@ export default function Admin() {
           <thead>
             <tr>
               <th>Order ID</th>
-              <th>Customer</th>
+              <th>Customer Name</th>
               <th>Date &amp; Time</th>
-              <th>Items</th>
-              <th>Total Amount</th>
-              <th>Status</th>
-              <th style={{ textAlign: "right" }}>Action</th>
+              <th>Payment</th>
+              <th style={{ textAlign: "right" }}>Price</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((o) => {
               const isCancelled = o.status === "Cancelled" || o.details?.csrStatus === "Cancelled by Customer";
-              const isDelivered = o.status === "Delivered";
               const createdDate = o.created_at ? new Date(o.created_at) : null;
               const timeFormatted = createdDate && !isNaN(createdDate.getTime())
                 ? createdDate.toLocaleDateString("en-PK", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
                 : "Recent";
+              const relativeAgo = createdDate ? timeAgo(createdDate) : "";
 
               return (
                 <tr
@@ -1649,64 +1666,39 @@ export default function Admin() {
                   onClick={() => onSelectOrder(o)}
                   className="recent-order-row"
                   style={{ cursor: "pointer" }}
+                  title="Click to view full order details"
                 >
                   <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                      <span style={{ fontWeight: 700, color: "#1e293b", fontSize: 13 }}>
-                        #{o.id}
+                    <span style={{ fontWeight: 700, color: "#1e293b", fontSize: 13 }}>
+                      #{o.id}
+                    </span>
+                  </td>
+                  <td>
+                    <span style={{ fontWeight: 600, color: "#0f172a", fontSize: 13 }}>
+                      {o.details?.name || "Customer"}
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: "#475569", fontSize: 12.5, whiteSpace: "nowrap" }}>
+                        {timeFormatted}
                       </span>
-                      {o.details?.source && (
-                        <span className="recent-order-channel-tag">
-                          {o.details.source.replace(" Order", "").replace(" Entry", "")}
+                      {relativeAgo && (
+                        <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", padding: "2px 7px", borderRadius: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
+                          {relativeAgo}
                         </span>
                       )}
                     </div>
                   </td>
                   <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <b style={{ color: "#0f172a", fontSize: 13 }}>{o.details?.name || "Customer"}</b>
-                      <small style={{ color: "#64748b", fontSize: 11.5 }}>
-                        {o.details?.phone || ""} {o.details?.city ? `· ${o.details.city}` : ""}
-                      </small>
-                    </div>
-                  </td>
-                  <td>
-                    <span style={{ color: "#475569", fontSize: 12.5, whiteSpace: "nowrap" }}>
-                      {timeFormatted}
+                    <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 8px", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 6, fontSize: 11.5, fontWeight: 700 }}>
+                      COD
                     </span>
-                  </td>
-                  <td>
-                    <span style={{ color: "#334155", fontSize: 12.5, fontWeight: 600 }}>
-                      {o.items.length} {o.items.length === 1 ? "item" : "items"}
-                    </span>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      <strong style={{ color: isCancelled ? "#94a3b8" : isDelivered ? "#15803d" : "#0f172a", fontSize: 13.5 }}>
-                        {money(o.total)}
-                      </strong>
-                      <small style={{ color: "#64748b", fontSize: 10.5 }}>Cash on Delivery</small>
-                    </div>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      <OrderStatusPill status={o.status} />
-                      {o.details?.csrStatus && o.details.csrStatus !== "Pending" && (
-                        <CsrBadge status={o.details.csrStatus} time={o.details.csrConfirmedAt} />
-                      )}
-                    </div>
                   </td>
                   <td style={{ textAlign: "right" }}>
-                    <button
-                      type="button"
-                      className="recent-order-view-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectOrder(o);
-                      }}
-                    >
-                      <Eye size={13} /> View details
-                    </button>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: isCancelled ? "#94a3b8" : "#0f172a" }}>
+                      {money(o.total)}
+                    </span>
                   </td>
                 </tr>
               );
