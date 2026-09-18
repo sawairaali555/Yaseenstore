@@ -36,8 +36,11 @@
 @media(max-width:700px){.admin-review-form{padding:18px}.admin-review-two{grid-template-columns:1fr;gap:0}.admin-review-form footer{flex-direction:column}.admin-review-form footer button{width:100%;min-width:0}}
 .admin-submenu-chevron{margin-left:auto;color:#7b70ed;transition:transform .16s ease}
 .admin-product-submenu{margin:0 0 8px 29px;padding:1px 0 2px 17px;border-left:1px solid #e1defd;display:flex;flex-direction:column;gap:2px}
-.admin-product-submenu a,.admin-product-submenu button{display:block;width:100%;padding:8px 8px;color:#697493;text-align:left;font-size:12px;line-height:1.2;border-radius:4px;background:transparent}
+.admin-product-submenu a,.admin-product-submenu button{display:flex;align-items:center;justify-content:space-between;width:100%;padding:8px 10px;color:#697493;text-align:left;font-size:12px;line-height:1.2;border-radius:5px;background:transparent;border:none;cursor:pointer;transition:background-color .15s ease,color .15s ease}
 .admin-product-submenu a:hover,.admin-product-submenu button:hover{background:#f3f1ff;color:#5d4bed}
+.admin-product-submenu button.active,.admin-product-submenu a.active{background:#efedff;color:#5d4bed;font-weight:700}
+.admin-product-submenu .admin-sub-badge{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:10px;background:#f1f5f9;color:#475569;margin-left:auto}
+.admin-product-submenu button.active .admin-sub-badge{background:#ddd6fe;color:#4338ca}
 .add-color-dialog{max-width:800px!important;border-radius:16px!important}.add-color-dialog .admin-fields{padding:20px 0 0}.add-color-dialog .admin-form-actions{margin-top:25px;padding-top:20px}.add-color-dialog select{height:40px}
 
 .product-group-row{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}.product-group-row:hover{border-color:#b0c4de!important;box-shadow:0 6px 20px rgba(32,54,100,0.08)!important;transform:translateY(-2px)}

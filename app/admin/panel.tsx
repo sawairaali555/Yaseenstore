@@ -563,6 +563,7 @@ export default function Admin() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [section, setSection] = useState("overview"),
     [productsOpen, setProductsOpen] = useState(true),
+    [ordersOpen, setOrdersOpen] = useState(true),
     [data, setData] = useState<Data | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
@@ -968,6 +969,26 @@ export default function Admin() {
   const pending = orders.filter((o) =>
     ["Pending", "Test order received", "Picklist", "Pack & AirwayBill", "Processing"].includes(o.status),
   );
+  const newCsrCount = orders.filter((o) =>
+    ["Pending", "Test order received", "New", "Placed"].includes(o.status) ||
+    (!o.details.csrStatus || o.details.csrStatus === "Pending") ||
+    o.details.csrStatus === "Callback Requested" ||
+    o.details.csrStatus?.startsWith("No Answer")
+  ).length;
+  const fulfillmentCount = orders.filter((o) =>
+    o.status === "Picklist" ||
+    ["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) ||
+    (o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status))
+  ).length;
+  const shippingCount = orders.filter((o) =>
+    ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) ||
+    (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber)
+  ).length;
+  const returnsRtoCount = orders.filter((o) =>
+    ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) ||
+    o.details.rtoRisk === "high" ||
+    o.details.returnStatus === "Requested"
+  ).length;
   const total = orders
     .filter((o) => o.status !== "Cancelled")
     .reduce((s, o) => s + o.total, 0);
@@ -2050,10 +2071,18 @@ export default function Admin() {
               .map((s) => (
                 <SidebarMenuItem key={s.id}>
                   <SidebarMenuButton
-                    isActive={section === s.id || (s.id === "products" && productsOpen)}
+                    isActive={section === s.id}
                     onClick={() => {
                       if (s.id === "products") {
                         setProductsOpen((open) => !open);
+                        if (section !== "products" && section !== "reviews") {
+                          navigate("products");
+                        }
+                      } else if (s.id === "orders") {
+                        setOrdersOpen((open) => !open);
+                        if (section !== "orders") {
+                          navigate("orders");
+                        }
                       } else navigate(s.id);
                     }}
                   >
@@ -2066,8 +2095,20 @@ export default function Admin() {
                         style={{ transform: productsOpen ? "rotate(0deg)" : "rotate(180deg)" }}
                       />
                     )}
-                    {s.id === "orders" && pending.length > 0 && (
-                      <b className="admin-count">{pending.length}</b>
+                    {s.id === "orders" && (
+                      <>
+                        {orders.length > 0 && (
+                          <b className="admin-count" style={{ marginLeft: "auto", marginRight: 4 }}>{orders.length}</b>
+                        )}
+                        <ChevronUp
+                          className="admin-submenu-chevron"
+                          size={14}
+                          style={{
+                            marginLeft: orders.length > 0 ? 0 : "auto",
+                            transform: ordersOpen ? "rotate(0deg)" : "rotate(180deg)",
+                          }}
+                        />
+                      </>
                     )}
                   </SidebarMenuButton>
                   {s.id === "products" && productsOpen && (
@@ -2077,6 +2118,98 @@ export default function Admin() {
                       <button type="button" onClick={() => { setProductsOpen(true); navigate("products"); }}>My Products</button>
                       <button type="button" onClick={() => { setProductsOpen(true); navigate("reviews"); }}>Reviews</button>
                       <button type="button" onClick={() => { setProductsOpen(true); navigate("products"); }}>Brands</button>
+                    </div>
+                  )}
+                  {s.id === "orders" && ordersOpen && (
+                    <div className="admin-product-submenu">
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "overview" && orderSubTab === "all" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("overview");
+                          setOrderSubTab("all");
+                        }}
+                      >
+                        <span>All Orders</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "new_csr" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("new_csr");
+                          setOrderSubTab("csr_confirmation");
+                        }}
+                      >
+                        <span>New &amp; CSR</span>
+                        {newCsrCount > 0 && <span className="admin-sub-badge">{newCsrCount}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "fulfillment" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("fulfillment");
+                          setOrderSubTab("confirmed");
+                        }}
+                      >
+                        <span>Fulfillment</span>
+                        {fulfillmentCount > 0 && <span className="admin-sub-badge">{fulfillmentCount}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "shipping" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("shipping");
+                          setOrderSubTab("ready_to_ship");
+                        }}
+                      >
+                        <span>Shipping</span>
+                        {shippingCount > 0 && <span className="admin-sub-badge">{shippingCount}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "completed" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("completed");
+                          setOrderSubTab("delivered");
+                        }}
+                      >
+                        <span>Delivered</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "issues_returns" && orderSubTab === "cancelled" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("issues_returns");
+                          setOrderSubTab("cancelled");
+                        }}
+                      >
+                        <span>Cancelled</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "issues_returns" && orderSubTab !== "cancelled" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("issues_returns");
+                          setOrderSubTab("return_requested");
+                        }}
+                      >
+                        <span>Returns &amp; RTO</span>
+                        {returnsRtoCount > 0 && <span className="admin-sub-badge">{returnsRtoCount}</span>}
+                      </button>
                     </div>
                   )}
                 </SidebarMenuItem>
