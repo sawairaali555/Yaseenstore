@@ -47,6 +47,7 @@ import {
   RotateCcw,
   AlertTriangle,
   ChevronDown,
+  Zap,
 } from "lucide-react";
 import {
   Sidebar,
@@ -641,6 +642,9 @@ export default function Admin() {
     [cancelReason, setCancelReason] = useState("Customer changed mind / duplicate order"),
     [cancelCustomNote, setCancelCustomNote] = useState(""),
     [manualOrderModalOpen, setManualOrderModalOpen] = useState(false),
+    [manualOrderMode, setManualOrderMode] = useState<"whatsapp" | "phone" | "counter" | "social" | "custom">("whatsapp"),
+    [manualFormView, setManualFormView] = useState<"quick" | "full">("quick"),
+    [manualDeliveryPreset, setManualDeliveryPreset] = useState<"standard" | "free" | "express" | "custom">("standard"),
     [manualCustomerName, setManualCustomerName] = useState(""),
     [manualCustomerPhone, setManualCustomerPhone] = useState(""),
     [manualCustomerAltPhone, setManualCustomerAltPhone] = useState(""),
@@ -857,7 +861,61 @@ export default function Admin() {
     }
   }, [data?.role]);
 
+  function applyOrderPreset(mode: "whatsapp" | "phone" | "counter" | "social" | "custom") {
+    setManualOrderMode(mode);
+    const standardFee = String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200);
+    if (mode === "whatsapp") {
+      setManualCustomerSource("WhatsApp Order");
+      setManualInitialCsrStatus("Confirmed");
+      setManualCustomDelivery(standardFee);
+      setManualDeliveryPreset("standard");
+      setManualOpenWhatsappAfter(true);
+      if (manualCustomerAddress === "Store Counter Walk-in Sale") setManualCustomerAddress("");
+    } else if (mode === "phone") {
+      setManualCustomerSource("Phone Call Order");
+      setManualInitialCsrStatus("Confirmed");
+      setManualCustomDelivery(standardFee);
+      setManualDeliveryPreset("standard");
+      setManualOpenWhatsappAfter(true);
+      if (manualCustomerAddress === "Store Counter Walk-in Sale") setManualCustomerAddress("");
+    } else if (mode === "counter") {
+      setManualCustomerSource("Counter / Walk-in");
+      setManualInitialCsrStatus("Confirmed");
+      setManualCustomDelivery("0");
+      setManualDeliveryPreset("free");
+      setManualOpenWhatsappAfter(false);
+      if (!manualCustomerAddress.trim() || manualCustomerAddress === "") {
+        setManualCustomerAddress("Store Counter Walk-in Sale");
+      }
+      if (!manualCustomerCity.trim()) setManualCustomerCity("Lahore");
+    } else if (mode === "social") {
+      setManualCustomerSource("Instagram / FB DM");
+      setManualInitialCsrStatus("Pending");
+      setManualCustomDelivery(standardFee);
+      setManualDeliveryPreset("standard");
+      setManualOpenWhatsappAfter(true);
+      if (manualCustomerAddress === "Store Counter Walk-in Sale") setManualCustomerAddress("");
+    } else if (mode === "custom") {
+      setManualCustomerSource("Direct Web Entry");
+      setManualDeliveryPreset("custom");
+    }
+  }
+
+  function applyDeliveryPreset(preset: "standard" | "free" | "express" | "custom") {
+    setManualDeliveryPreset(preset);
+    const standardFee = String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200);
+    if (preset === "standard") {
+      setManualCustomDelivery(standardFee);
+    } else if (preset === "free") {
+      setManualCustomDelivery("0");
+    } else if (preset === "express") {
+      setManualCustomDelivery("350");
+    }
+  }
+
   function openManualOrderModal() {
+    setManualOrderMode("whatsapp");
+    setManualFormView("quick");
     setManualCustomerName("");
     setManualCustomerPhone("");
     setManualCustomerAltPhone("");
@@ -876,7 +934,9 @@ export default function Admin() {
       setManualSizeChoice(sizeOptionsFor(firstProd)[0] || "Standard");
     }
     setManualQtyChoice(1);
-    setManualCustomDelivery(String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200));
+    const standardFee = String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200);
+    setManualCustomDelivery(standardFee);
+    setManualDeliveryPreset("standard");
     setManualCustomDiscount("0");
     setManualOpenWhatsappAfter(true);
     setManualOrderModalOpen(true);
@@ -5752,13 +5812,81 @@ export default function Admin() {
       >
         <DialogContent className="admin-dialog" style={{ maxWidth: 880, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
           <DialogHeader>
-            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 18, color: "#1e293b" }}>
-              <ShoppingBag size={20} style={{ color: "#16a34a" }} /> Place Manual Order
-            </DialogTitle>
-            <DialogDescription>
-              Record phone, WhatsApp, Instagram, or counter walk-in orders with real-time stock deduction.
-            </DialogDescription>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 18, color: "#1e293b" }}>
+                  <ShoppingBag size={20} style={{ color: "#16a34a" }} /> Place Manual Order
+                </DialogTitle>
+                <DialogDescription>
+                  Record phone, WhatsApp, Instagram, or counter walk-in orders with real-time stock deduction.
+                </DialogDescription>
+              </div>
+
+              {/* Form View Mode Radio Buttons (Quick vs Full) */}
+              <div className="manual-view-toggle-pill" role="radiogroup" aria-label="Form View Mode">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={manualFormView === "quick"}
+                  className={`manual-view-toggle-btn ${manualFormView === "quick" ? "active" : ""}`}
+                  onClick={() => setManualFormView("quick")}
+                >
+                  <Zap size={13} style={{ color: manualFormView === "quick" ? "#d97706" : "inherit" }} />
+                  ⚡ Quick Mode (30s)
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={manualFormView === "full"}
+                  className={`manual-view-toggle-btn ${manualFormView === "full" ? "active" : ""}`}
+                  onClick={() => setManualFormView("full")}
+                >
+                  <SlidersHorizontal size={13} />
+                  📋 Full Details
+                </button>
+              </div>
+            </div>
           </DialogHeader>
+
+          {/* Quick Order Channel / Preset Radio Bar */}
+          <div className="manual-order-header-bar">
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                <span>🎯 Select Order Type / Preset (Auto-adjusts form):</span>
+                <span style={{ fontWeight: 500, textTransform: "none", color: "#16a34a" }}>
+                  {manualOrderMode === "whatsapp" && "💬 WhatsApp Mode: Confirmed + Auto-WhatsApp"}
+                  {manualOrderMode === "phone" && "📞 Phone Call: Confirmed + Standard COD"}
+                  {manualOrderMode === "counter" && "🏪 Counter Cash Sale: Rs. 0 Delivery + Instant Pickup"}
+                  {manualOrderMode === "social" && "📸 Social Media DM: Pending CSR Verification"}
+                  {manualOrderMode === "custom" && "⚙️ Custom Mode: Manual Configuration"}
+                </span>
+              </div>
+
+              <div className="manual-radio-group" role="radiogroup" aria-label="Order Mode Preset">
+                {[
+                  { id: "whatsapp", label: "💬 WhatsApp COD", colorClass: "green" },
+                  { id: "phone", label: "📞 Phone Call", colorClass: "green" },
+                  { id: "counter", label: "🏪 Counter / Walk-in", colorClass: "active" },
+                  { id: "social", label: "📸 Instagram / FB", colorClass: "amber" },
+                  { id: "custom", label: "⚙️ Custom Entry", colorClass: "active" },
+                ].map((preset) => (
+                  <label
+                    key={preset.id}
+                    className={`manual-radio-label ${manualOrderMode === preset.id ? `active ${preset.colorClass}` : ""}`}
+                  >
+                    <input
+                      type="radio"
+                      name="manualOrderPreset"
+                      value={preset.id}
+                      checked={manualOrderMode === preset.id}
+                      onChange={() => applyOrderPreset(preset.id as any)}
+                    />
+                    <span>{preset.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
 
           <form onSubmit={handleCreateManualOrder}>
             <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 20, marginTop: 14 }}>
@@ -5779,7 +5907,7 @@ export default function Admin() {
                   />
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: manualFormView === "full" ? "1fr 1fr" : "1fr", gap: 10 }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Mobile Phone *</label>
                     <input
@@ -5790,34 +5918,38 @@ export default function Admin() {
                       style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
                     />
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Alt Phone (Optional)</label>
-                    <input
-                      placeholder="0321 7654321"
-                      value={manualCustomerAltPhone}
-                      onChange={(e) => setManualCustomerAltPhone(e.target.value)}
-                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
-                    />
-                  </div>
+                  {manualFormView === "full" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Alt Phone (Optional)</label>
+                      <input
+                        placeholder="0321 7654321"
+                        value={manualCustomerAltPhone}
+                        onChange={(e) => setManualCustomerAltPhone(e.target.value)}
+                        style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                      />
+                    </div>
+                  )}
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Province</label>
-                    <select
-                      value={manualCustomerProvince}
-                      onChange={(e) => {
-                        setManualCustomerProvince(e.target.value);
-                        const cities = (PAKISTAN_CITIES_BY_PROVINCE as any)[e.target.value] || [];
-                        if (cities.length > 0) setManualCustomerCity(cities[0]);
-                      }}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                    >
-                      {PAKISTAN_PROVINCES.map((prov) => (
-                        <option key={prov} value={prov}>{prov}</option>
-                      ))}
-                    </select>
-                  </div>
+                <div style={{ display: "grid", gridTemplateColumns: manualFormView === "full" ? "1fr 1fr" : "1fr", gap: 10 }}>
+                  {manualFormView === "full" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Province</label>
+                      <select
+                        value={manualCustomerProvince}
+                        onChange={(e) => {
+                          setManualCustomerProvince(e.target.value);
+                          const cities = (PAKISTAN_CITIES_BY_PROVINCE as any)[e.target.value] || [];
+                          if (cities.length > 0) setManualCustomerCity(cities[0]);
+                        }}
+                        style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      >
+                        {PAKISTAN_PROVINCES.map((prov) => (
+                          <option key={prov} value={prov}>{prov}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                     <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Destination City *</label>
                     <select
@@ -5858,53 +5990,79 @@ export default function Admin() {
                   />
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Nearest Landmark (Optional)</label>
-                  <input
-                    placeholder="e.g. Near Shell Pump / Gourmet Bakery"
-                    value={manualCustomerLandmark}
-                    onChange={(e) => setManualCustomerLandmark(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                  />
+                {manualFormView === "full" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Nearest Landmark (Optional)</label>
+                    <input
+                      placeholder="e.g. Near Shell Pump / Gourmet Bakery"
+                      value={manualCustomerLandmark}
+                      onChange={(e) => setManualCustomerLandmark(e.target.value)}
+                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    />
+                  </div>
+                )}
+
+                {/* CSR Initial Status Radio Buttons */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>CSR Verification Status</label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }} role="radiogroup" aria-label="CSR Status">
+                    <label
+                      className={`manual-radio-label ${manualInitialCsrStatus === "Confirmed" ? "active green" : ""}`}
+                      style={{ padding: "8px 10px", justifyContent: "flex-start" }}
+                    >
+                      <input
+                        type="radio"
+                        name="manualCsrStatus"
+                        value="Confirmed"
+                        checked={manualInitialCsrStatus === "Confirmed"}
+                        onChange={() => setManualInitialCsrStatus("Confirmed")}
+                      />
+                      <span>🟢 Confirmed (Picklist)</span>
+                    </label>
+
+                    <label
+                      className={`manual-radio-label ${manualInitialCsrStatus === "Pending" ? "active amber" : ""}`}
+                      style={{ padding: "8px 10px", justifyContent: "flex-start" }}
+                    >
+                      <input
+                        type="radio"
+                        name="manualCsrStatus"
+                        value="Pending"
+                        checked={manualInitialCsrStatus === "Pending"}
+                        onChange={() => setManualInitialCsrStatus("Pending")}
+                      />
+                      <span>🟡 Pending Call</span>
+                    </label>
+                  </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Channel / Source</label>
-                    <select
-                      value={manualCustomerSource}
-                      onChange={(e) => setManualCustomerSource(e.target.value)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                    >
-                      <option value="WhatsApp Order">💬 WhatsApp Order</option>
-                      <option value="Phone Call Order">📞 Phone Call Order</option>
-                      <option value="Instagram / FB DM">📸 Instagram / FB DM</option>
-                      <option value="Counter / Walk-in">🏪 Counter / Walk-in</option>
-                      <option value="Direct Web Entry">🌐 Direct Web Entry</option>
-                    </select>
+                {manualFormView === "full" && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Channel / Source</label>
+                      <select
+                        value={manualCustomerSource}
+                        onChange={(e) => setManualCustomerSource(e.target.value)}
+                        style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      >
+                        <option value="WhatsApp Order">💬 WhatsApp Order</option>
+                        <option value="Phone Call Order">📞 Phone Call Order</option>
+                        <option value="Instagram / FB DM">📸 Instagram / FB DM</option>
+                        <option value="Counter / Walk-in">🏪 Counter / Walk-in</option>
+                        <option value="Direct Web Entry">🌐 Direct Web Entry</option>
+                      </select>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Note / Request</label>
+                      <input
+                        placeholder="e.g. Call before delivery"
+                        value={manualOrderNote}
+                        onChange={(e) => setManualOrderNote(e.target.value)}
+                        style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      />
+                    </div>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Initial Status</label>
-                    <select
-                      value={manualInitialCsrStatus}
-                      onChange={(e) => setManualInitialCsrStatus(e.target.value as any)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                    >
-                      <option value="Confirmed">🟢 CSR Confirmed (Direct to Picklist)</option>
-                      <option value="Pending">🟡 Pending Verification Call</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Note / Customer Request</label>
-                  <input
-                    placeholder="e.g. Call before delivery, urgent delivery"
-                    value={manualOrderNote}
-                    onChange={(e) => setManualOrderNote(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                  />
-                </div>
+                )}
               </div>
 
               {/* Right Column: Product Selection & Pricing */}
@@ -6008,7 +6166,7 @@ export default function Admin() {
                 </div>
 
                 {/* Added Items List */}
-                <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, minHeight: 120, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, background: "#ffffff" }}>
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, minHeight: 110, maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, background: "#ffffff" }}>
                   {manualOrderItems.length === 0 ? (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 12, padding: "20px 0" }}>
                       <ShoppingBag size={24} style={{ marginBottom: 4, opacity: 0.5 }} />
@@ -6036,34 +6194,96 @@ export default function Admin() {
                   )}
                 </div>
 
-                {/* Price Breakdown */}
-                <div style={{ background: "#f1f5f9", padding: 12, borderRadius: 8, display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+                {/* Price Breakdown with Delivery Radio Buttons */}
+                <div style={{ background: "#f1f5f9", padding: 12, borderRadius: 8, display: "flex", flexDirection: "column", gap: 8, fontSize: 12 }}>
                   {(() => {
                     const subtotal = manualOrderItems.reduce((acc, item) => acc + item.totalPrice, 0);
                     const delivery = Math.max(0, parseInt(manualCustomDelivery) || 0);
                     const discount = Math.max(0, parseInt(manualCustomDiscount) || 0);
                     const grandTotal = Math.max(0, subtotal + delivery - discount);
+                    const standardFee = String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200);
+
                     return (
                       <>
                         <div style={{ display: "flex", justifyContent: "space-between", color: "#475569" }}>
                           <span>Items Subtotal:</span>
                           <b>{money(subtotal)}</b>
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
-                          <span>Delivery Charges:</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <span>Rs.</span>
-                            <input
-                              type="number"
-                              min={0}
-                              value={manualCustomDelivery}
-                              onChange={(e) => setManualCustomDelivery(e.target.value)}
-                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
-                            />
+
+                        {/* Delivery Charges Radio Group */}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid #e2e8f0", paddingTop: 6 }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Delivery Fee Options:</span>
+                          <div className="manual-delivery-grid" role="radiogroup" aria-label="Delivery Options">
+                            <label className={`manual-delivery-item ${manualDeliveryPreset === "standard" ? "active" : ""}`}>
+                              <input
+                                type="radio"
+                                name="manualDeliveryRadio"
+                                value="standard"
+                                checked={manualDeliveryPreset === "standard"}
+                                onChange={() => applyDeliveryPreset("standard")}
+                                style={{ display: "none" }}
+                              />
+                              <span>🚚 Standard</span>
+                              <b style={{ marginTop: 2 }}>Rs. {standardFee}</b>
+                            </label>
+
+                            <label className={`manual-delivery-item ${manualDeliveryPreset === "free" ? "active" : ""}`}>
+                              <input
+                                type="radio"
+                                name="manualDeliveryRadio"
+                                value="free"
+                                checked={manualDeliveryPreset === "free"}
+                                onChange={() => applyDeliveryPreset("free")}
+                                style={{ display: "none" }}
+                              />
+                              <span>🆓 Free / Self</span>
+                              <b style={{ marginTop: 2 }}>Rs. 0</b>
+                            </label>
+
+                            <label className={`manual-delivery-item ${manualDeliveryPreset === "express" ? "active" : ""}`}>
+                              <input
+                                type="radio"
+                                name="manualDeliveryRadio"
+                                value="express"
+                                checked={manualDeliveryPreset === "express"}
+                                onChange={() => applyDeliveryPreset("express")}
+                                style={{ display: "none" }}
+                              />
+                              <span>⚡ Express</span>
+                              <b style={{ marginTop: 2 }}>Rs. 350</b>
+                            </label>
+
+                            <label className={`manual-delivery-item ${manualDeliveryPreset === "custom" ? "active" : ""}`}>
+                              <input
+                                type="radio"
+                                name="manualDeliveryRadio"
+                                value="custom"
+                                checked={manualDeliveryPreset === "custom"}
+                                onChange={() => setManualDeliveryPreset("custom")}
+                                style={{ display: "none" }}
+                              />
+                              <span>✏️ Custom</span>
+                              <b style={{ marginTop: 2 }}>Rs. {manualCustomDelivery}</b>
+                            </label>
                           </div>
+
+                          {manualDeliveryPreset === "custom" && (
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569", marginTop: 4 }}>
+                              <span>Custom Delivery (Rs.):</span>
+                              <input
+                                type="number"
+                                min={0}
+                                value={manualCustomDelivery}
+                                onChange={(e) => setManualCustomDelivery(e.target.value)}
+                                style={{ width: 80, padding: "3px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
+                              />
+                            </div>
+                          )}
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
-                          <span>Discount:</span>
+
+                        {/* Custom Discount (Rs.) */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569", borderTop: "1px solid #e2e8f0", paddingTop: 6 }}>
+                          <span>Special Discount:</span>
                           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                             <span>- Rs.</span>
                             <input
@@ -6071,10 +6291,11 @@ export default function Admin() {
                               min={0}
                               value={manualCustomDiscount}
                               onChange={(e) => setManualCustomDiscount(e.target.value)}
-                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
+                              style={{ width: 70, padding: "3px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
                             />
                           </div>
                         </div>
+
                         <div style={{ display: "flex", justifyContent: "space-between", color: "#0f172a", fontSize: 14, fontWeight: 800, borderTop: "1px solid #cbd5e1", paddingTop: 6, marginTop: 2 }}>
                           <span>Total COD Amount:</span>
                           <span style={{ color: "#16a34a" }}>{money(grandTotal)}</span>
