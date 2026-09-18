@@ -641,6 +641,7 @@ export default function Admin() {
     [cancelReason, setCancelReason] = useState("Customer changed mind / duplicate order"),
     [cancelCustomNote, setCancelCustomNote] = useState(""),
     [manualOrderModalOpen, setManualOrderModalOpen] = useState(false),
+    [manualMoreDetailsOpen, setManualMoreDetailsOpen] = useState(false),
     [manualCustomerName, setManualCustomerName] = useState(""),
     [manualCustomerPhone, setManualCustomerPhone] = useState(""),
     [manualCustomerAltPhone, setManualCustomerAltPhone] = useState(""),
@@ -870,6 +871,7 @@ export default function Admin() {
     setManualOrderNote("");
     setManualInitialCsrStatus("Confirmed");
     setManualOrderItems([]);
+    setManualMoreDetailsOpen(false);
     const firstProd = products.find((p) => p.status === "Active") || products[0];
     if (firstProd) {
       setManualProductChoice(firstProd.id);
@@ -5750,174 +5752,245 @@ export default function Admin() {
           if (!open && !busy) setManualOrderModalOpen(false);
         }}
       >
-        <DialogContent className="admin-dialog" style={{ maxWidth: 880, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
-          <DialogHeader>
-            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 18, color: "#1e293b" }}>
-              <ShoppingBag size={20} style={{ color: "#16a34a" }} /> Place Manual Order
-            </DialogTitle>
-            <DialogDescription>
-              Record phone, WhatsApp, Instagram, or counter walk-in orders with real-time stock deduction.
-            </DialogDescription>
+        <DialogContent className="admin-dialog" style={{ maxWidth: 940, padding: 24, borderRadius: 12 }}>
+          <DialogHeader style={{ paddingBottom: 14, borderBottom: "1px solid #e2e8f0" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 18, color: "#1e293b", fontWeight: 800 }}>
+                  <ShoppingBag size={20} style={{ color: "#16a34a" }} /> Place Manual Order
+                </DialogTitle>
+                <DialogDescription style={{ fontSize: 12.5, color: "#64748b", marginTop: 2 }}>
+                  Create customer phone, WhatsApp, counter or social orders with real-time stock deduction.
+                </DialogDescription>
+              </div>
+
+              {/* Quick CSR Status Switcher */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#f1f5f9", padding: "4px 6px", borderRadius: 8 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#475569", paddingLeft: 4 }}>Status:</span>
+                <button
+                  type="button"
+                  onClick={() => setManualInitialCsrStatus("Confirmed")}
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 6,
+                    border: "none",
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    background: manualInitialCsrStatus === "Confirmed" ? "#16a34a" : "transparent",
+                    color: manualInitialCsrStatus === "Confirmed" ? "#ffffff" : "#475569",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  🟢 Confirmed (Picklist)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setManualInitialCsrStatus("Pending")}
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 6,
+                    border: "none",
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    background: manualInitialCsrStatus === "Pending" ? "#eab308" : "transparent",
+                    color: manualInitialCsrStatus === "Pending" ? "#ffffff" : "#475569",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  🟡 Pending Call
+                </button>
+              </div>
+            </div>
           </DialogHeader>
 
-          <form onSubmit={handleCreateManualOrder}>
-            <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 20, marginTop: 14 }}>
-              {/* Left Column: Customer & Delivery Info */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                  <User size={15} style={{ color: "#4f46e5" }} /> 1. Customer &amp; Delivery Details
-                </h4>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Customer Full Name *</label>
-                  <input
-                    required
-                    placeholder="e.g. Muhammad Ali"
-                    value={manualCustomerName}
-                    onChange={(e) => setManualCustomerName(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
-                  />
+          <form onSubmit={handleCreateManualOrder} style={{ display: "flex", flexDirection: "column", gap: 18, marginTop: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+              {/* Left Column: Customer & Delivery Details */}
+              <div className="manual-order-card">
+                <div className="manual-order-card-header">
+                  <User size={16} style={{ color: "#2563eb" }} />
+                  <span>1. Customer &amp; Delivery Details</span>
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Mobile Phone *</label>
+                  <div className="manual-field-group">
+                    <label>Customer Full Name *</label>
                     <input
                       required
+                      className="manual-field-input"
+                      placeholder="e.g. Muhammad Ali"
+                      value={manualCustomerName}
+                      onChange={(e) => setManualCustomerName(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="manual-field-group">
+                    <label>Mobile Number *</label>
+                    <input
+                      required
+                      className="manual-field-input"
                       placeholder="0300 1234567"
                       value={manualCustomerPhone}
                       onChange={(e) => setManualCustomerPhone(e.target.value)}
-                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
-                    />
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Alt Phone (Optional)</label>
-                    <input
-                      placeholder="0321 7654321"
-                      value={manualCustomerAltPhone}
-                      onChange={(e) => setManualCustomerAltPhone(e.target.value)}
-                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
                     />
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Province</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 10 }}>
+                  <div className="manual-field-group">
+                    <label>Destination City *</label>
                     <select
-                      value={manualCustomerProvince}
-                      onChange={(e) => {
-                        setManualCustomerProvince(e.target.value);
-                        const cities = (PAKISTAN_CITIES_BY_PROVINCE as any)[e.target.value] || [];
-                        if (cities.length > 0) setManualCustomerCity(cities[0]);
-                      }}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                    >
-                      {PAKISTAN_PROVINCES.map((prov) => (
-                        <option key={prov} value={prov}>{prov}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Destination City *</label>
-                    <select
+                      className="manual-field-input"
                       value={manualCustomerCity}
                       onChange={(e) => setManualCustomerCity(e.target.value)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
                     >
-                      {((PAKISTAN_CITIES_BY_PROVINCE as any)[manualCustomerProvince] || ALL_PAKISTAN_CITIES).map((c: string) => (
+                      {ALL_PAKISTAN_CITIES.map((c: string) => (
                         <option key={c} value={c}>{c}</option>
                       ))}
                       <option value="Other">Other City / Area…</option>
                     </select>
                   </div>
+
+                  <div className="manual-field-group">
+                    <label>Delivery Fee (Rs.)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      className="manual-field-input"
+                      value={manualCustomDelivery}
+                      onChange={(e) => setManualCustomDelivery(e.target.value)}
+                      placeholder="200"
+                    />
+                  </div>
                 </div>
 
                 {manualCustomerCity === "Other" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Custom City Name *</label>
+                  <div className="manual-field-group">
+                    <label>Custom City Name *</label>
                     <input
                       required
+                      className="manual-field-input"
                       placeholder="Enter custom city or tehsil"
                       value={manualCustomerCustomCity}
                       onChange={(e) => setManualCustomerCustomCity(e.target.value)}
-                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
                     />
                   </div>
                 )}
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Complete Delivery Address *</label>
+                <div className="manual-field-group">
+                  <label>Complete Street Address / House / Flat *</label>
                   <textarea
                     required
                     rows={2}
-                    placeholder="House / Flat #, Street #, Mohallah / Block, Sector…"
+                    className="manual-field-textarea"
+                    placeholder="House / Flat #, Street #, Mohallah / Sector / Area…"
                     value={manualCustomerAddress}
                     onChange={(e) => setManualCustomerAddress(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5, resize: "vertical" }}
                   />
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Nearest Landmark (Optional)</label>
-                  <input
-                    placeholder="e.g. Near Shell Pump / Gourmet Bakery"
-                    value={manualCustomerLandmark}
-                    onChange={(e) => setManualCustomerLandmark(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                  />
-                </div>
+                {/* Collapsible Additional Details */}
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setManualMoreDetailsOpen(!manualMoreDetailsOpen)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#2563eb",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                    }}
+                  >
+                    <span>{manualMoreDetailsOpen ? "▲ Hide Optional Details" : "+ Add Landmark, Alt Phone, Province, Note"}</span>
+                  </button>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Channel / Source</label>
-                    <select
-                      value={manualCustomerSource}
-                      onChange={(e) => setManualCustomerSource(e.target.value)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                    >
-                      <option value="WhatsApp Order">💬 WhatsApp Order</option>
-                      <option value="Phone Call Order">📞 Phone Call Order</option>
-                      <option value="Instagram / FB DM">📸 Instagram / FB DM</option>
-                      <option value="Counter / Walk-in">🏪 Counter / Walk-in</option>
-                      <option value="Direct Web Entry">🌐 Direct Web Entry</option>
-                    </select>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Initial Status</label>
-                    <select
-                      value={manualInitialCsrStatus}
-                      onChange={(e) => setManualInitialCsrStatus(e.target.value as any)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                    >
-                      <option value="Confirmed">🟢 CSR Confirmed (Direct to Picklist)</option>
-                      <option value="Pending">🟡 Pending Verification Call</option>
-                    </select>
-                  </div>
-                </div>
+                  {manualMoreDetailsOpen && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10, padding: 12, background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div className="manual-field-group">
+                          <label>Alternate Phone</label>
+                          <input
+                            className="manual-field-input"
+                            placeholder="0321 7654321"
+                            value={manualCustomerAltPhone}
+                            onChange={(e) => setManualCustomerAltPhone(e.target.value)}
+                          />
+                        </div>
+                        <div className="manual-field-group">
+                          <label>Nearest Landmark</label>
+                          <input
+                            className="manual-field-input"
+                            placeholder="Near Shell Pump"
+                            value={manualCustomerLandmark}
+                            onChange={(e) => setManualCustomerLandmark(e.target.value)}
+                          />
+                        </div>
+                      </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Note / Customer Request</label>
-                  <input
-                    placeholder="e.g. Call before delivery, urgent delivery"
-                    value={manualOrderNote}
-                    onChange={(e) => setManualOrderNote(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
-                  />
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div className="manual-field-group">
+                          <label>Province</label>
+                          <select
+                            className="manual-field-input"
+                            value={manualCustomerProvince}
+                            onChange={(e) => setManualCustomerProvince(e.target.value)}
+                          >
+                            {PAKISTAN_PROVINCES.map((prov) => (
+                              <option key={prov} value={prov}>{prov}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="manual-field-group">
+                          <label>Order Channel</label>
+                          <select
+                            className="manual-field-input"
+                            value={manualCustomerSource}
+                            onChange={(e) => setManualCustomerSource(e.target.value)}
+                          >
+                            <option value="WhatsApp Order">💬 WhatsApp Order</option>
+                            <option value="Phone Call Order">📞 Phone Call Order</option>
+                            <option value="Instagram / FB DM">📸 Instagram / FB DM</option>
+                            <option value="Counter / Walk-in">🏪 Counter / Walk-in</option>
+                            <option value="Direct Web Entry">🌐 Direct Web Entry</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="manual-field-group">
+                        <label>Order Notes / Customer Instructions</label>
+                        <input
+                          className="manual-field-input"
+                          placeholder="e.g. Deliver after 3 PM"
+                          value={manualOrderNote}
+                          onChange={(e) => setManualOrderNote(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Right Column: Product Selection & Pricing */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Package size={15} style={{ color: "#16a34a" }} /> 2. Items &amp; Order Pricing
-                </h4>
+              {/* Right Column: Items & Total Summary */}
+              <div className="manual-order-card">
+                <div className="manual-order-card-header">
+                  <Package size={16} style={{ color: "#16a34a" }} />
+                  <span>2. Product Items &amp; COD Summary</span>
+                </div>
 
                 {/* Product Picker Box */}
-                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Select Product to Add</label>
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div className="manual-field-group">
+                    <label>Select Product</label>
                     <select
+                      className="manual-field-input"
                       value={manualProductChoice}
                       onChange={(e) => {
                         setManualProductChoice(e.target.value);
@@ -5927,7 +6000,6 @@ export default function Admin() {
                           setManualSizeChoice(sizes[0] || "Standard");
                         }
                       }}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
                     >
                       {products.filter((p) => p.status === "Active").map((p) => (
                         <option key={p.id} value={p.id}>
@@ -5937,14 +6009,14 @@ export default function Admin() {
                     </select>
                   </div>
 
-                  {/* Size & Quantity Picker */}
-                  <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                      <label style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Size / Variant</label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }} className="manual-field-group">
+                      <label>Size / Variant</label>
                       <select
+                        className="manual-field-input"
+                        style={{ height: 34, fontSize: 12 }}
                         value={manualSizeChoice}
                         onChange={(e) => setManualSizeChoice(e.target.value)}
-                        style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12 }}
                       >
                         {(() => {
                           const p = products.find((x) => x.id === manualProductChoice);
@@ -5956,22 +6028,23 @@ export default function Admin() {
                       </select>
                     </div>
 
-                    <div style={{ width: 80, display: "flex", flexDirection: "column", gap: 4 }}>
-                      <label style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Qty</label>
+                    <div style={{ width: 75 }} className="manual-field-group">
+                      <label>Qty</label>
                       <input
                         type="number"
                         min={1}
                         max={10}
+                        className="manual-field-input"
+                        style={{ height: 34, fontSize: 12, textAlign: "center" }}
                         value={manualQtyChoice}
                         onChange={(e) => setManualQtyChoice(Math.max(1, parseInt(e.target.value) || 1))}
-                        style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "center" }}
                       />
                     </div>
 
                     <button
                       type="button"
                       className="admin-primary"
-                      style={{ padding: "7px 14px", fontSize: 12, height: 34, background: "#203664" }}
+                      style={{ height: 34, padding: "0 14px", fontSize: 12, background: "#16a34a", display: "inline-flex", alignItems: "center", gap: 5 }}
                       onClick={() => {
                         const p = products.find((x) => x.id === manualProductChoice);
                         if (!p) return;
@@ -6007,17 +6080,16 @@ export default function Admin() {
                   </div>
                 </div>
 
-                {/* Added Items List */}
-                <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, minHeight: 120, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, background: "#ffffff" }}>
+                {/* Items List (Natural clean height, no inner scroll slider) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, minHeight: 60 }}>
                   {manualOrderItems.length === 0 ? (
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 12, padding: "20px 0" }}>
-                      <ShoppingBag size={24} style={{ marginBottom: 4, opacity: 0.5 }} />
-                      <span>No items added yet. Pick a product above and click Add.</span>
+                    <div style={{ padding: "14px", textAlign: "center", color: "#94a3b8", fontSize: 12, background: "#f8fafc", borderRadius: 6, border: "1px dashed #cbd5e1" }}>
+                      No items added yet. Pick a product and click "+ Add".
                     </div>
                   ) : (
                     manualOrderItems.map((item, idx) => (
-                      <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", background: "#f8fafc", borderRadius: 6, border: "1px solid #f1f5f9" }}>
-                        <img src={item.image} alt={item.name} style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 4, background: "#ffffff" }} />
+                      <div key={idx} className="manual-item-row">
+                        <img src={item.image} alt={item.name} style={{ width: 34, height: 34, objectFit: "contain", borderRadius: 4, background: "#ffffff", border: "1px solid #e2e8f0" }} />
                         <div style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
                           <div style={{ fontWeight: 600, color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
                           <div style={{ color: "#64748b", fontSize: 11 }}>{item.size} · {item.qty} × {money(item.unitPrice)}</div>
@@ -6036,48 +6108,40 @@ export default function Admin() {
                   )}
                 </div>
 
-                {/* Price Breakdown */}
-                <div style={{ background: "#f1f5f9", padding: 12, borderRadius: 8, display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+                {/* Cost Calculation Box */}
+                <div className="manual-summary-box">
                   {(() => {
                     const subtotal = manualOrderItems.reduce((acc, item) => acc + item.totalPrice, 0);
                     const delivery = Math.max(0, parseInt(manualCustomDelivery) || 0);
                     const discount = Math.max(0, parseInt(manualCustomDiscount) || 0);
                     const grandTotal = Math.max(0, subtotal + delivery - discount);
+
                     return (
                       <>
                         <div style={{ display: "flex", justifyContent: "space-between", color: "#475569" }}>
                           <span>Items Subtotal:</span>
                           <b>{money(subtotal)}</b>
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
+
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#475569" }}>
                           <span>Delivery Charges:</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <span>Rs.</span>
-                            <input
-                              type="number"
-                              min={0}
-                              value={manualCustomDelivery}
-                              onChange={(e) => setManualCustomDelivery(e.target.value)}
-                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
-                            />
-                          </div>
+                          <b>{delivery === 0 ? "Free (Rs. 0)" : money(delivery)}</b>
                         </div>
+
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
-                          <span>Discount:</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <span>- Rs.</span>
-                            <input
-                              type="number"
-                              min={0}
-                              value={manualCustomDiscount}
-                              onChange={(e) => setManualCustomDiscount(e.target.value)}
-                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
-                            />
-                          </div>
+                          <span>Discount (Rs.):</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={manualCustomDiscount}
+                            onChange={(e) => setManualCustomDiscount(e.target.value)}
+                            style={{ width: 75, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
+                          />
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", color: "#0f172a", fontSize: 14, fontWeight: 800, borderTop: "1px solid #cbd5e1", paddingTop: 6, marginTop: 2 }}>
-                          <span>Total COD Amount:</span>
-                          <span style={{ color: "#16a34a" }}>{money(grandTotal)}</span>
+
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#0f172a", fontSize: 14, fontWeight: 800, borderTop: "1px solid #cbd5e1", paddingTop: 8, marginTop: 2 }}>
+                          <span>Grand Total COD:</span>
+                          <span style={{ color: "#16a34a", fontSize: 15 }}>{money(grandTotal)}</span>
                         </div>
                       </>
                     );
@@ -6086,8 +6150,8 @@ export default function Admin() {
               </div>
             </div>
 
-            {/* Dialog Footer Actions */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "1px solid #e2e8f0", flexWrap: "wrap", gap: 10 }}>
+            {/* Bottom Actions Bar */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 14, borderTop: "1px solid #e2e8f0", flexWrap: "wrap", gap: 10 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155", cursor: "pointer" }}>
                 <input
                   type="checkbox"
@@ -6111,7 +6175,7 @@ export default function Admin() {
                   type="submit"
                   className="admin-primary"
                   disabled={busy || manualOrderItems.length === 0}
-                  style={{ background: "#16a34a" }}
+                  style={{ background: "#16a34a", padding: "8px 22px", fontSize: 13, fontWeight: 700 }}
                 >
                   {busy ? "Placing Order…" : "Place Manual Order"}
                 </button>
