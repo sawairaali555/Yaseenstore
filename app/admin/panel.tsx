@@ -675,6 +675,7 @@ export default function Admin() {
     [manualInitialCsrStatus, setManualInitialCsrStatus] = useState<"Confirmed" | "Pending">("Confirmed"),
     [manualOrderItems, setManualOrderItems] = useState<{ id: string; name: string; sku: string; image: string; color: string; size: string; qty: number; unitPrice: number; totalPrice: number }[]>([]),
     [manualProductChoice, setManualProductChoice] = useState(""),
+    [manualProductSearch, setManualProductSearch] = useState(""),
     [manualSizeChoice, setManualSizeChoice] = useState("Standard"),
     [manualQtyChoice, setManualQtyChoice] = useState(1),
     [manualCustomDelivery, setManualCustomDelivery] = useState("200"),
@@ -897,6 +898,7 @@ export default function Admin() {
       setManualSizeChoice(sizeOptionsFor(firstProd)[0] || "Standard");
     }
     setManualQtyChoice(1);
+    setManualProductSearch("");
     setManualCustomDelivery(String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200));
     setManualCustomDiscount("0");
     setManualOpenWhatsappAfter(true);
@@ -2036,7 +2038,7 @@ export default function Admin() {
                       title="Open CSR verification drawer to edit address, log notes, and update verification status"
                       onClick={() => openCsrModal(o)}
                     >
-                      <PhoneCall size={12} style={{ color: "#475569" }} /> CSR Log
+                      <PhoneCall size={12} style={{ color: "#475569" }} /> CSR Confirmation
                     </button>
                   </div>
                 </div>
@@ -5433,7 +5435,7 @@ export default function Admin() {
                     style={{ fontSize: 11, padding: "4px 8px" }}
                     onClick={() => openCsrModal(selected)}
                   >
-                    <PhoneCall size={12} /> CSR Log
+                    <PhoneCall size={12} /> CSR Confirmation
                   </button>
                 </div>
               </div>
@@ -6336,26 +6338,120 @@ export default function Admin() {
 
                 {/* Product Picker Box */}
                 <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Select Product to Add</label>
-                    <select
-                      value={manualProductChoice}
-                      onChange={(e) => {
-                        setManualProductChoice(e.target.value);
-                        const p = products.find((x) => x.id === e.target.value);
-                        if (p) {
-                          const sizes = sizeOptionsFor(p);
-                          setManualSizeChoice(sizes[0] || "Standard");
-                        }
-                      }}
-                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
-                    >
-                      {products.filter((p) => p.status === "Active").map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} · {money(effectivePrice(p))} (Stock: {p.stock || 0})
-                        </option>
-                      ))}
-                    </select>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Select Product to Add</label>
+                      {manualProductSearch && (
+                        <span style={{ fontSize: 11, color: "#64748b" }}>
+                          {products.filter((p) => p.status === "Active" && (
+                            p.name.toLowerCase().includes(manualProductSearch.toLowerCase()) ||
+                            (p.sku && p.sku.toLowerCase().includes(manualProductSearch.toLowerCase())) ||
+                            (p.color && p.color.toLowerCase().includes(manualProductSearch.toLowerCase()))
+                          )).length} found
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Search Input for Products */}
+                    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                      <Search size={14} style={{ position: "absolute", left: 10, color: "#94a3b8", pointerEvents: "none" }} />
+                      <input
+                        type="text"
+                        placeholder="Search product by name, SKU or color..."
+                        value={manualProductSearch}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setManualProductSearch(val);
+                          const active = products.filter((p) => p.status === "Active");
+                          const filtered = active.filter((p) =>
+                            p.name.toLowerCase().includes(val.toLowerCase()) ||
+                            (p.sku && p.sku.toLowerCase().includes(val.toLowerCase())) ||
+                            (p.color && p.color.toLowerCase().includes(val.toLowerCase()))
+                          );
+                          if (filtered.length > 0 && !filtered.some((p) => p.id === manualProductChoice)) {
+                            setManualProductChoice(filtered[0].id);
+                            const sizes = sizeOptionsFor(filtered[0]);
+                            setManualSizeChoice(sizes[0] || "Standard");
+                          }
+                        }}
+                        style={{
+                          width: "100%",
+                          padding: "8px 30px 8px 30px",
+                          borderRadius: 7,
+                          border: "1px solid #cbd5e1",
+                          fontSize: 12.5,
+                          height: 36,
+                          background: "#ffffff",
+                        }}
+                      />
+                      {manualProductSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setManualProductSearch("")}
+                          style={{
+                            position: "absolute",
+                            right: 6,
+                            background: "none",
+                            border: "none",
+                            color: "#94a3b8",
+                            cursor: "pointer",
+                            padding: 4,
+                            display: "flex",
+                            alignItems: "center",
+                          }}
+                          title="Clear search"
+                        >
+                          <X size={13} />
+                        </button>
+                      )}
+                    </div>
+
+                    {(() => {
+                      const active = products.filter((p) => p.status === "Active");
+                      const filtered = manualProductSearch.trim()
+                        ? active.filter((p) =>
+                            p.name.toLowerCase().includes(manualProductSearch.toLowerCase()) ||
+                            (p.sku && p.sku.toLowerCase().includes(manualProductSearch.toLowerCase())) ||
+                            (p.color && p.color.toLowerCase().includes(manualProductSearch.toLowerCase()))
+                          )
+                        : active;
+
+                      if (!filtered.length) {
+                        return (
+                          <div style={{ padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, color: "#b91c1c", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span>No product matching "{manualProductSearch}"</span>
+                            <button
+                              type="button"
+                              onClick={() => setManualProductSearch("")}
+                              style={{ background: "none", border: "none", color: "#b91c1c", fontSize: 11, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <select
+                          value={manualProductChoice}
+                          onChange={(e) => {
+                            setManualProductChoice(e.target.value);
+                            const p = products.find((x) => x.id === e.target.value);
+                            if (p) {
+                              const sizes = sizeOptionsFor(p);
+                              setManualSizeChoice(sizes[0] || "Standard");
+                            }
+                          }}
+                          style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13, height: 40, background: "#ffffff" }}
+                        >
+                          {filtered.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} · {money(effectivePrice(p))} (Stock: {p.stock || 0})
+                            </option>
+                          ))}
+                        </select>
+                      );
+                    })()}
                   </div>
 
                   {/* Size & Quantity Picker */}
