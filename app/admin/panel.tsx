@@ -43,6 +43,10 @@ import {
   Copy,
   Calendar,
   User,
+  Filter,
+  RotateCcw,
+  AlertTriangle,
+  ChevronDown,
 } from "lucide-react";
 import {
   Sidebar,
@@ -207,6 +211,74 @@ export function getCourierTrackingUrl(courier?: string, trackingNumber?: string)
   if (c.includes("leopard")) return `https://leopardscourier.com/tracking/`;
   if (c.includes("postex")) return `https://postex.pk/tracking?cn=${encodeURIComponent(cleanCn)}`;
   return `https://www.google.com/search?q=${encodeURIComponent((courier || "courier") + " tracking " + cleanCn)}`;
+}
+
+export function getCustomerHistory(orders: Order[], phone?: string, currentOrderId?: string) {
+  if (!phone) return { count: 1, deliveredCount: 0, rtoCount: 0, isFirstOrder: true };
+  const clean = phone.replace(/[^0-9]/g, "").slice(-10);
+  if (!clean) return { count: 1, deliveredCount: 0, rtoCount: 0, isFirstOrder: true };
+  const matching = orders.filter((o) => {
+    const op = (o.details?.phone || "").replace(/[^0-9]/g, "").slice(-10);
+    return op === clean;
+  });
+  const count = matching.length;
+  const deliveredCount = matching.filter((o) => o.status === "Delivered").length;
+  const rtoCount = matching.filter(
+    (o) =>
+      ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status) ||
+      o.details?.csrStatus === "Cancelled by Customer" ||
+      o.details?.rtoRisk === "high"
+  ).length;
+  return {
+    count: Math.max(count, 1),
+    deliveredCount,
+    rtoCount,
+    isFirstOrder: count <= 1,
+  };
+}
+
+export function getOrderExceptions(order: Order, allOrders: Order[]) {
+  const exceptions: { type: "duplicate" | "rto" | "incomplete" | "callback"; label: string; bg: string; color: string; border: string }[] = [];
+  const cleanPhone = (order.details?.phone || "").replace(/[^0-9]/g, "").slice(-10);
+  const orderTime = order.created_at ? new Date(order.created_at).getTime() : 0;
+
+  // Check duplicate (same phone in last 24h)
+  const isDuplicate = allOrders.some((o) => {
+    if (o.id === order.id) return false;
+    const otherPhone = (o.details?.phone || "").replace(/[^0-9]/g, "").slice(-10);
+    const otherTime = o.created_at ? new Date(o.created_at).getTime() : 0;
+    const isRecent = orderTime > 0 && otherTime > 0 && Math.abs(orderTime - otherTime) < 24 * 60 * 60 * 1000;
+    return isRecent && cleanPhone && otherPhone === cleanPhone;
+  });
+  if (isDuplicate) {
+    exceptions.push({ type: "duplicate", label: "⚠️ Possible Duplicate", bg: "#fff7ed", color: "#c2410c", border: "#fdba74" });
+  }
+
+  // Check Previous RTO
+  const prevRto = allOrders.some((o) => {
+    if (o.id === order.id) return false;
+    const otherPhone = (o.details?.phone || "").replace(/[^0-9]/g, "").slice(-10);
+    return cleanPhone && otherPhone === cleanPhone && (
+      ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status) ||
+      o.details?.csrStatus === "Cancelled by Customer" ||
+      o.details?.rtoRisk === "high"
+    );
+  });
+  if (prevRto || order.details?.rtoRisk === "high") {
+    exceptions.push({ type: "rto", label: "⚠️ High RTO Risk", bg: "#fef2f2", color: "#b91c1c", border: "#fca5a5" });
+  }
+
+  // Check Address Incomplete
+  if (!order.details?.address || order.details.address.trim().length < 12 || !order.details?.city || order.details?.csrStatus === "Address Incomplete") {
+    exceptions.push({ type: "incomplete", label: "⚠️ Address Incomplete", bg: "#fefce8", color: "#a16207", border: "#fde047" });
+  }
+
+  // Check Callback Overdue
+  if (order.details?.csrStatus === "Callback Requested") {
+    exceptions.push({ type: "callback", label: "📞 Callback Needed", bg: "#f0f9ff", color: "#0369a1", border: "#7dd3fc" });
+  }
+
+  return exceptions;
 }
 
 export function getWhatsAppConfirmationMessage(
@@ -548,7 +620,60 @@ export default function Admin() {
     [csrEditableLandmark, setCsrEditableLandmark] = useState(""),
     [csrStatusInput, setCsrStatusInput] = useState<CsrStatus>("Pending"),
     [csrNoteInput, setCsrNoteInput] = useState(""),
-    [csrAutoMovePicklist, setCsrAutoMovePicklist] = useState(true);
+    [csrAutoMovePicklist, setCsrAutoMovePicklist] = useState(true),
+    [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false),
+    [dateFilter, setDateFilter] = useState<"all" | "today" | "yesterday" | "7days" | "30days">("all"),
+    [cityFilter, setCityFilter] = useState("all"),
+    [courierFilter, setCourierFilter] = useState("all"),
+    [rtoRiskFilter, setRtoRiskFilter] = useState<"all" | "normal" | "high">("all"),
+    [cancelModalOrder, setCancelModalOrder] = useState<Order | null>(null),
+    [cancelReason, setCancelReason] = useState("Customer changed mind / duplicate order"),
+    [cancelCustomNote, setCancelCustomNote] = useState("");
+
+  async function handleCancelOrder(order: Order, reason: string, note?: string) {
+    const timestamp = new Date().toISOString();
+    const fullNote = reason + (note ? `: ${note}` : "");
+    const historyEntry: CsrHistoryEntry = {
+      id: Math.random().toString(36).slice(2, 9),
+      time: timestamp,
+      status: "Cancelled by Customer",
+      note: `Cancelled: ${fullNote}`,
+      agent: data?.name || "Admin",
+    };
+    const updatedHistory = [historyEntry, ...(order.details.csrHistory || [])];
+    const updatedDetails = {
+      ...order.details,
+      csrStatus: "Cancelled by Customer" as CsrStatus,
+      csrNotes: fullNote,
+      csrHistory: updatedHistory,
+    };
+
+    const ok = await write({
+      action: "order",
+      id: order.id,
+      status: "Cancelled",
+      details: updatedDetails,
+      csrStatus: "Cancelled by Customer",
+      csrNotes: fullNote,
+      csrHistory: updatedHistory,
+    });
+
+    if (ok) {
+      setData((curr) => curr ? {
+        ...curr,
+        orders: curr.orders.map((item) => item.id === order.id ? {
+          ...item,
+          status: "Cancelled",
+          details: updatedDetails,
+        } : item)
+      } : curr);
+      toast.success(`Order ${order.id} has been cancelled.`);
+      setCancelModalOrder(null);
+      if (selected?.id === order.id) {
+        setSelected({ ...selected, status: "Cancelled", details: updatedDetails });
+      }
+    }
+  }
 
   function openCsrModal(order: Order) {
     setCsrOrder(order);
@@ -687,7 +812,12 @@ export default function Admin() {
   function navigate(s: string) {
     setSection(s);
     setQuery("");
-    setFilter("All statuses");
+    setFilter("All");
+    setCsrFilter("all");
+    setDateFilter("all");
+    setCityFilter("all");
+    setCourierFilter("all");
+    setRtoRiskFilter("all");
     setCategoryFilter("");
     setGroupStatusFilter("");
     setStockFilter("");
@@ -810,23 +940,92 @@ export default function Admin() {
       {} as Record<string, Order["details"] & { count: number; total: number }>,
     ),
   );
+  const uniqueCities = Array.from(new Set(orders.map((o) => o.details.city).filter(Boolean))).sort();
+
   const filteredOrders = orders.filter((o) => {
-    const matchesStatus =
-      filter === "All statuses" ||
-      o.status === filter ||
-      (filter === "Pending" && o.status === "Test order received") ||
-      (filter === "Pack & AirwayBill" && o.status === "Processing") ||
-      (filter === "Shipped" && o.status === "Dispatched");
+    // 1. Primary Operational Tabs Matching
+    let matchesStatus = true;
+    if (filter === "New") {
+      matchesStatus = ["Pending", "Test order received", "New", "Placed"].includes(o.status);
+    } else if (filter === "Picklist") {
+      matchesStatus = o.status === "Picklist";
+    } else if (filter === "Packing") {
+      matchesStatus = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status);
+    } else if (filter === "Shipped") {
+      matchesStatus = ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status);
+    } else if (filter === "Delivered") {
+      matchesStatus = o.status === "Delivered";
+    } else if (filter === "Cancelled") {
+      matchesStatus = o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer";
+    } else if (filter === "Returns / RTO") {
+      matchesStatus = ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status) || o.details.rtoRisk === "high";
+    } else if (filter !== "All" && filter !== "All statuses") {
+      matchesStatus =
+        o.status === filter ||
+        (filter === "Pending" && o.status === "Test order received") ||
+        (filter === "Pack & AirwayBill" && o.status === "Processing") ||
+        (filter === "Shipped" && o.status === "Dispatched");
+    }
 
+    // 2. CSR Secondary Filter Matching
     const cStatus = o.details.csrStatus || "Pending";
-    const matchesCsr =
-      csrFilter === "all" ||
-      (csrFilter === "pending" && (cStatus === "Pending" || !o.details.csrStatus)) ||
-      (csrFilter === "confirmed" && cStatus === "Confirmed") ||
-      (csrFilter === "no-answer" && (cStatus.startsWith("No Answer") || cStatus === "Callback Requested")) ||
-      (csrFilter === "whatsapp" && cStatus === "WhatsApp Sent") ||
-      (csrFilter === "cancelled" && (cStatus === "Cancelled by Customer" || o.status === "Cancelled"));
+    let matchesCsr = true;
+    if (csrFilter === "pending") {
+      matchesCsr = cStatus === "Pending" || !o.details.csrStatus;
+    } else if (csrFilter === "confirmed") {
+      matchesCsr = cStatus === "Confirmed";
+    } else if (csrFilter === "no-answer") {
+      matchesCsr = cStatus.startsWith("No Answer");
+    } else if (csrFilter === "callback") {
+      matchesCsr = cStatus === "Callback Requested";
+    } else if (csrFilter === "whatsapp") {
+      matchesCsr = cStatus === "WhatsApp Sent";
+    } else if (csrFilter === "cancelled") {
+      matchesCsr = cStatus === "Cancelled by Customer" || o.status === "Cancelled";
+    }
 
+    // 3. Date Filter Matching
+    let matchesDate = true;
+    if (dateFilter !== "all" && o.created_at) {
+      const orderDate = new Date(o.created_at);
+      const now = new Date();
+      if (dateFilter === "today") {
+        matchesDate = orderDate.toDateString() === now.toDateString();
+      } else if (dateFilter === "yesterday") {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        matchesDate = orderDate.toDateString() === yesterday.toDateString();
+      } else if (dateFilter === "7days") {
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        matchesDate = orderDate >= sevenDaysAgo;
+      } else if (dateFilter === "30days") {
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        matchesDate = orderDate >= thirtyDaysAgo;
+      }
+    }
+
+    // 4. City Filter Matching
+    let matchesCity = true;
+    if (cityFilter !== "all") {
+      matchesCity = (o.details.city || "").toLowerCase() === cityFilter.toLowerCase();
+    }
+
+    // 5. Courier Filter Matching
+    let matchesCourier = true;
+    if (courierFilter !== "all") {
+      const cour = (o.details.courier || "").toLowerCase();
+      matchesCourier = cour.includes(courierFilter.toLowerCase());
+    }
+
+    // 6. RTO Risk Filter Matching
+    let matchesRtoRisk = true;
+    if (rtoRiskFilter === "high") {
+      matchesRtoRisk = o.details.rtoRisk === "high" || ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status);
+    } else if (rtoRiskFilter === "normal") {
+      matchesRtoRisk = o.details.rtoRisk !== "high" && !["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status);
+    }
+
+    // 7. Universal Query Search
     const q = query.toLowerCase().trim();
     const matchesQuery =
       !q ||
@@ -841,17 +1040,28 @@ export default function Admin() {
         " " +
         o.details.city +
         " " +
+        (o.details.province || "") +
+        " " +
         (o.details.address || "") +
+        " " +
+        (o.details.landmark || "") +
+        " " +
+        (o.details.courier || "") +
+        " " +
+        (o.details.trackingNumber || "") +
         " " +
         (o.details.csrNotes || "") +
         " " +
         (o.details.csrStatus || "") +
         " " +
-        o.items.map((i) => (i.name || "") + " " + (i.sku || "")).join(" ")
+        (o.details.note || "") +
+        " " +
+        o.items.map((i) => (i.name || "") + " " + (i.sku || "") + " " + (i.color || "") + " " + (i.size || "")).join(" ")
       )
         .toLowerCase()
         .includes(q);
-    return matchesStatus && matchesCsr && matchesQuery;
+
+    return matchesStatus && matchesCsr && matchesDate && matchesCity && matchesCourier && matchesRtoRisk && matchesQuery;
   });
   const filteredProducts = products.filter((p) => {
     const matchesStatus = filter === "All statuses" || p.status === filter;
@@ -1085,8 +1295,17 @@ export default function Admin() {
             : prod ? photo(prod) : "/images/placeholder.jpg";
           
           const currentStepIdx = getStepIndex(o.status);
+          const isCancelled = o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer";
           const isCsrConfirmed = o.details.csrStatus === "Confirmed";
+          const isPlaced = ["Pending", "Test order received", "New", "Placed"].includes(o.status);
+          const isPicklist = o.status === "Picklist";
+          const isPacking = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status);
+          const isShipped = ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status);
+          const isDelivered = o.status === "Delivered";
+
           const trackingUrl = getCourierTrackingUrl(o.details.courier, o.details.trackingNumber);
+          const customerHistory = getCustomerHistory(orders, o.details.phone, o.id);
+          const exceptions = getOrderExceptions(o, orders);
 
           const createdDate = o.created_at ? new Date(o.created_at) : null;
           const timeFormatted = createdDate && !isNaN(createdDate.getTime())
@@ -1182,10 +1401,40 @@ export default function Admin() {
               <div className="order-card-body">
                 {/* Column 1: Customer & Delivery Address */}
                 <div className="order-customer-col">
-                  <div className="order-customer-name">
-                    <User size={15} style={{ color: "#4f46e5" }} />
-                    <span>{o.details.name}</span>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, flexWrap: "wrap" }}>
+                    <div className="order-customer-name">
+                      <User size={15} style={{ color: "#4f46e5" }} />
+                      <span>{o.details.name}</span>
+                    </div>
+
+                    {customerHistory.isFirstOrder ? (
+                      <span className="order-customer-history-tag" title="First time customer on store">
+                        ✨ 1st Order
+                      </span>
+                    ) : (
+                      <span
+                        className={`order-customer-history-tag ${customerHistory.rtoCount > 0 ? "risk" : "loyal"}`}
+                        title={`${customerHistory.count} total orders, ${customerHistory.deliveredCount} delivered, ${customerHistory.rtoCount} RTO/returned`}
+                      >
+                        {customerHistory.rtoCount > 0 ? "⚠️" : "📦"} {customerHistory.count} Orders · {customerHistory.deliveredCount} Delv{customerHistory.rtoCount > 0 ? ` · ${customerHistory.rtoCount} RTO` : ""}
+                      </span>
+                    )}
                   </div>
+
+                  {/* Warning Exception Badges */}
+                  {exceptions.length > 0 && (
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap", margin: "2px 0" }}>
+                      {exceptions.map((exc, idx) => (
+                        <span
+                          key={idx}
+                          className="order-exception-pill"
+                          style={{ background: exc.bg, color: exc.color, border: `1px solid ${exc.border}` }}
+                        >
+                          {exc.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="order-phone-row">
                     <span>📞 <b>{o.details.phone}</b></span>
@@ -1258,14 +1507,14 @@ export default function Admin() {
                   </div>
                 </div>
 
-                {/* Column 2: Milestone Stepper */}
+                {/* Column 2: Milestone Stepper (Visual Non-Clickable Display) */}
                 <div className="order-stepper-col">
                   <div className="order-stepper-label">
                     <span>Order Progress</span>
-                    <span style={{ fontSize: 10, color: "#10b981", fontWeight: 600 }}>Click step to advance</span>
+                    <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>Pipeline Stage</span>
                   </div>
 
-                  {o.status === "Cancelled" ? (
+                  {isCancelled ? (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "8px 12px", marginTop: 4 }}>
                       <span style={{ color: "#b91c1c", fontWeight: 700, fontSize: 12 }}>❌ Order Cancelled</span>
                       <button
@@ -1274,17 +1523,17 @@ export default function Admin() {
                         style={{ padding: "4px 10px", fontSize: 11, background: "#ffffff", border: "1px solid #fca5a5", color: "#b91c1c" }}
                         disabled={busy}
                         onClick={async () => {
-                          const ok = await write({ action: "order", id: o.id, status: "Pending" });
+                          const ok = await write({ action: "order", id: o.id, status: "Pending", csrStatus: "Pending" });
                           if (ok) {
                             setData((curr) => curr ? {
                               ...curr,
-                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Pending" } : item)
+                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Pending", details: { ...item.details, csrStatus: "Pending" } } : item)
                             } : curr);
                             toast.success(`Order ${o.id} restored to Pending`);
                           }
                         }}
                       >
-                        Reactivate Order
+                        <RotateCcw size={12} /> Reactivate
                       </button>
                     </div>
                   ) : (
@@ -1295,38 +1544,45 @@ export default function Admin() {
                         const isPassed = currentStepIdx > idx;
                         const isActive = isCurrent || isPassed;
                         return (
-                          <button
+                          <div
                             key={step.id}
-                            type="button"
-                            className={`milestone-step-btn ${isActive ? "active" : ""} ${isCurrent ? "current" : ""} ${isPassed ? "passed" : ""}`}
-                            title={`Click to set status to ${step.label} (${step.id})`}
-                            disabled={busy}
-                            onClick={async () => {
-                              if (busy) return;
-                              const ok = await write({ action: "order", id: o.id, status: step.id });
-                              if (ok) {
-                                setData((curr) => curr ? {
-                                  ...curr,
-                                  orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: step.id } : item)
-                                } : curr);
-                                toast.success(`Order ${o.id} marked as ${step.label}`);
-                              } else {
-                                toast.error(`Failed to update order status`);
-                              }
-                            }}
+                            className={`milestone-step-display ${isActive ? "active" : ""} ${isCurrent ? "current" : ""} ${isPassed ? "passed" : ""}`}
                           >
                             <div className="milestone-circle">
                               {isPassed ? <Check size={13} /> : <StepIcon size={12} />}
                             </div>
                             <span className="milestone-label">{step.label}</span>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
                   )}
+
+                  {/* Stepper Extra Meta Info */}
+                  <div className="order-stepper-meta">
+                    {o.details.trackingNumber ? (
+                      <span className="stepper-meta-item">
+                        🚚 <b>{o.details.courier || "Trax"}:</b> {o.details.trackingNumber}
+                      </span>
+                    ) : isCsrConfirmed ? (
+                      <span className="stepper-meta-item" style={{ color: "#166534" }}>
+                        🟢 CSR Verified by {o.details.csrAgent || "CSR Agent"} {o.details.csrConfirmedAt ? `(${new Date(o.details.csrConfirmedAt).toLocaleDateString("en-PK", { month: "short", day: "numeric" })})` : ""}
+                      </span>
+                    ) : (
+                      <span className="stepper-meta-item" style={{ color: "#a16207" }}>
+                        🟡 Pending customer verification call
+                      </span>
+                    )}
+
+                    {o.details.note && (
+                      <div className="order-stepper-note" title={o.details.note}>
+                        💬 <i>"{o.details.note.length > 60 ? o.details.note.slice(0, 57) + "…" : o.details.note}"</i>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Column 3: Products & Smart Actions */}
+                {/* Column 3: Products & ONE Primary Action */}
                 <div className="order-product-col">
                   <div className="order-product-item">
                     <img
@@ -1366,35 +1622,169 @@ export default function Admin() {
                     </div>
                   </div>
 
-                  {/* Smart Actions */}
+                  {/* Smart ONE Primary Action Button */}
                   <div className="order-smart-actions">
-                    {!isCsrConfirmed ? (
+                    {isCancelled ? (
                       <button
                         type="button"
-                        className="order-primary-btn"
-                        style={{ background: "#16a34a", color: "#ffffff" }}
+                        className="order-primary-btn reactivate"
                         disabled={busy}
-                        onClick={() => updateCsrStatus(o, "Confirmed", "Quick verified on phone", true)}
-                        title="Confirm order over phone and move to Picklist"
+                        onClick={async () => {
+                          const ok = await write({ action: "order", id: o.id, status: "Pending", csrStatus: "Pending" });
+                          if (ok) {
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Pending", details: { ...item.details, csrStatus: "Pending" } } : item)
+                            } : curr);
+                            toast.success(`Order ${o.id} reactivated to Pending`);
+                          }
+                        }}
+                        title="Reactivate cancelled order"
                       >
-                        <Check size={14} /> Quick CSR Confirm
+                        <RotateCcw size={13} /> Reactivate Order
                       </button>
+                    ) : !isCsrConfirmed ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn confirm"
+                        disabled={busy}
+                        onClick={() => updateCsrStatus(o, "Confirmed", "Quick verified on call", true)}
+                        title="Confirm order over phone and automatically move to Picklist"
+                      >
+                        <Check size={14} /> Confirm Order
+                      </button>
+                    ) : isPlaced ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn picklist"
+                        disabled={busy}
+                        onClick={async () => {
+                          const ok = await write({ action: "order", id: o.id, status: "Picklist" });
+                          if (ok) {
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Picklist" } : item)
+                            } : curr);
+                            toast.success(`Order ${o.id} added to Picklist`);
+                          }
+                        }}
+                        title="Move order into warehouse picklist"
+                      >
+                        <Package size={14} /> Add to Picklist
+                      </button>
+                    ) : isPicklist ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn packing"
+                        disabled={busy}
+                        onClick={async () => {
+                          const ok = await write({ action: "order", id: o.id, status: "Pack & AirwayBill" });
+                          if (ok) {
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Pack & AirwayBill" } : item)
+                            } : curr);
+                            toast.success(`Order ${o.id} moved to Packing`);
+                          }
+                        }}
+                        title="Move order to packaging and Airway Bill generation"
+                      >
+                        <Package size={14} /> Start Packing
+                      </button>
+                    ) : isPacking ? (
+                      !o.details.trackingNumber ? (
+                        <button
+                          type="button"
+                          className="order-primary-btn airwaybill"
+                          onClick={() => {
+                            setAirwayBillOrders([o]);
+                            setCourierName(o.details.courier || "Trax Logistics");
+                            setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
+                          }}
+                          title="Generate and print official Airway Bill shipping label"
+                        >
+                          <Printer size={14} /> Generate Airway Bill
+                        </button>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            type="button"
+                            className="order-primary-btn shipped"
+                            style={{ flex: 1 }}
+                            disabled={busy}
+                            onClick={async () => {
+                              const ok = await write({ action: "order", id: o.id, status: "Shipped" });
+                              if (ok) {
+                                setData((curr) => curr ? {
+                                  ...curr,
+                                  orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Shipped" } : item)
+                                } : curr);
+                                toast.success(`Order ${o.id} marked as Shipped`);
+                              }
+                            }}
+                            title="Mark as handed over to courier rider"
+                          >
+                            <Truck size={14} /> Mark Shipped
+                          </button>
+                          <button
+                            type="button"
+                            className="order-sub-btn"
+                            style={{ padding: "0 10px" }}
+                            onClick={() => {
+                              setAirwayBillOrders([o]);
+                              setCourierName(o.details.courier || "Trax Logistics");
+                              setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
+                            }}
+                            title="Print Airway Bill label"
+                          >
+                            <Printer size={14} />
+                          </button>
+                        </div>
+                      )
+                    ) : isShipped ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn delivered"
+                        disabled={busy}
+                        onClick={async () => {
+                          const ok = await write({ action: "order", id: o.id, status: "Delivered" });
+                          if (ok) {
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Delivered" } : item)
+                            } : curr);
+                            toast.success(`Order ${o.id} marked as Delivered!`);
+                          }
+                        }}
+                        title="Confirm parcel delivery & COD cash collection"
+                      >
+                        <CheckCircle2 size={14} /> Mark Delivered
+                      </button>
+                    ) : isDelivered ? (
+                      <div className="order-delivered-pill">
+                        <CheckCircle2 size={14} /> Delivered & Collected
+                      </div>
                     ) : (
                       <button
                         type="button"
-                        className="order-primary-btn"
-                        style={{ background: "#7e22ce", color: "#ffffff" }}
-                        onClick={() => {
-                          setAirwayBillOrders([o]);
-                          setCourierName(o.details.courier || "Trax Logistics");
-                          setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
+                        className="order-primary-btn picklist"
+                        disabled={busy}
+                        onClick={async () => {
+                          const ok = await write({ action: "order", id: o.id, status: "Picklist" });
+                          if (ok) {
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Picklist" } : item)
+                            } : curr);
+                            toast.success(`Order ${o.id} added to Picklist`);
+                          }
                         }}
-                        title="Generate & print official Airway Bill shipping label"
                       >
-                        <Printer size={14} /> Print Airway Bill
+                        <Package size={14} /> Add to Picklist
                       </button>
                     )}
 
+                    {/* Secondary Actions Row */}
                     <div className="order-secondary-btn-row">
                       <button
                         type="button"
@@ -1430,6 +1820,21 @@ export default function Admin() {
                       >
                         <SlidersHorizontal size={12} style={{ color: "#475569" }} /> Details
                       </button>
+
+                      {!isCancelled && (
+                        <button
+                          type="button"
+                          className="order-sub-btn cancel"
+                          onClick={() => {
+                            setCancelModalOrder(o);
+                            setCancelReason("Customer changed mind / duplicate order");
+                            setCancelCustomNote("");
+                          }}
+                          title="Cancel order with reason"
+                        >
+                          <X size={12} /> Cancel
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1441,11 +1846,23 @@ export default function Admin() {
     ) : (
       <div className="admin-empty">
         <ShoppingBag />
-        <h3>No orders yet</h3>
-        <p>Test orders placed through checkout will appear here.</p>
-        <a href="/products" className="admin-secondary">
-          Visit your store <ArrowUpRight size={16} />
-        </a>
+        <h3>No orders found</h3>
+        <p>No orders match the selected filters or search criteria.</p>
+        <button
+          type="button"
+          className="admin-secondary"
+          onClick={() => {
+            setQuery("");
+            setFilter("All");
+            setCsrFilter("all");
+            setDateFilter("all");
+            setCityFilter("all");
+            setCourierFilter("all");
+            setRtoRiskFilter("all");
+          }}
+        >
+          <RotateCcw size={14} /> Clear All Filters
+        </button>
       </div>
     );
   }
@@ -1725,8 +2142,8 @@ export default function Admin() {
                     <div className="order-kpi-strip">
                       <button
                         type="button"
-                        className={`order-kpi-pill ${filter === "All statuses" && csrFilter === "all" ? "active" : ""}`}
-                        onClick={() => { setFilter("All statuses"); setCsrFilter("all"); }}
+                        className={`order-kpi-pill ${filter === "All" && csrFilter === "all" ? "active" : ""}`}
+                        onClick={() => { setFilter("All"); setCsrFilter("all"); }}
                       >
                         <span>📦 Total Orders:</span>
                         <span className="order-kpi-count">{orders.length}</span>
@@ -1735,7 +2152,7 @@ export default function Admin() {
                       <button
                         type="button"
                         className={`order-kpi-pill ${csrFilter === "pending" ? "active" : ""}`}
-                        onClick={() => { setFilter("All statuses"); setCsrFilter("pending"); }}
+                        onClick={() => { setFilter("All"); setCsrFilter("pending"); }}
                         style={{ borderColor: "#fde047", background: csrFilter === "pending" ? "#fefce8" : undefined }}
                       >
                         <span>🟡 Needs CSR Call:</span>
@@ -1747,7 +2164,7 @@ export default function Admin() {
                       <button
                         type="button"
                         className={`order-kpi-pill ${csrFilter === "confirmed" ? "active" : ""}`}
-                        onClick={() => { setFilter("All statuses"); setCsrFilter("confirmed"); }}
+                        onClick={() => { setFilter("All"); setCsrFilter("confirmed"); }}
                         style={{ borderColor: "#86efac", background: csrFilter === "confirmed" ? "#f0fdf4" : undefined }}
                       >
                         <span>🟢 CSR Verified:</span>
@@ -1773,7 +2190,7 @@ export default function Admin() {
                       >
                         <span>🚚 Shipped:</span>
                         <span className="order-kpi-count" style={{ color: "#2563eb" }}>
-                          {orders.filter((o) => ["Shipped", "Dispatched"].includes(o.status)).length}
+                          {orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status)).length}
                         </span>
                       </button>
 
@@ -1785,15 +2202,17 @@ export default function Admin() {
                       </div>
                     </div>
 
+                    {/* 8 Primary Operational Order Navigation Tabs */}
                     <div className="order-status-tabs">
                       {[
-                        { id: "All statuses", label: "All", count: orders.length },
-                        { id: "Pending", label: "Pending", count: orders.filter((o) => ["Pending", "Test order received"].includes(o.status)).length },
+                        { id: "All", label: "All", count: orders.length },
+                        { id: "New", label: "New", count: orders.filter((o) => ["Pending", "Test order received", "New", "Placed"].includes(o.status)).length },
                         { id: "Picklist", label: "Picklist", count: orders.filter((o) => o.status === "Picklist").length },
-                        { id: "Pack & AirwayBill", label: "Pack & AirwayBill", count: orders.filter((o) => ["Pack & AirwayBill", "Processing"].includes(o.status)).length },
-                        { id: "Shipped", label: "Shipped", count: orders.filter((o) => ["Shipped", "Dispatched"].includes(o.status)).length },
+                        { id: "Packing", label: "Packing", count: orders.filter((o) => ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status)).length },
+                        { id: "Shipped", label: "Shipped", count: orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery"].includes(o.status)).length },
                         { id: "Delivered", label: "Delivered", count: orders.filter((o) => o.status === "Delivered").length },
-                        { id: "Cancelled", label: "Cancelled", count: orders.filter((o) => o.status === "Cancelled").length },
+                        { id: "Cancelled", label: "Cancelled", count: orders.filter((o) => o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer").length },
+                        { id: "Returns / RTO", label: "Returns / RTO", count: orders.filter((o) => ["Failed Delivery", "RTO", "Returned", "Refunded"].includes(o.status) || o.details.rtoRisk === "high").length },
                       ].map((tab) => (
                         <button
                           key={tab.id}
@@ -1807,14 +2226,15 @@ export default function Admin() {
                       ))}
                     </div>
 
-                    {/* CSR Confirmation Status Filter Bar */}
+                    {/* Secondary CSR Sub-Bar */}
                     <div className="csr-filter-bar">
-                      <span>CSR Filter:</span>
+                      <span>CSR Sub-Filter:</span>
                       {[
-                        { id: "all", label: "All Orders", count: orders.length },
+                        { id: "all", label: "All", count: orders.length },
                         { id: "pending", label: "🟡 Pending Call", count: orders.filter((o) => !o.details.csrStatus || o.details.csrStatus === "Pending").length },
                         { id: "confirmed", label: "🟢 Confirmed", count: orders.filter((o) => o.details.csrStatus === "Confirmed").length },
-                        { id: "no-answer", label: "🟠 No Answer", count: orders.filter((o) => o.details.csrStatus?.startsWith("No Answer") || o.details.csrStatus === "Callback Requested").length },
+                        { id: "no-answer", label: "🟠 No Answer", count: orders.filter((o) => o.details.csrStatus?.startsWith("No Answer")).length },
+                        { id: "callback", label: "🔵 Callback", count: orders.filter((o) => o.details.csrStatus === "Callback Requested").length },
                         { id: "whatsapp", label: "🟣 WhatsApp Sent", count: orders.filter((o) => o.details.csrStatus === "WhatsApp Sent").length },
                         { id: "cancelled", label: "⚫ Cancelled", count: orders.filter((o) => o.details.csrStatus === "Cancelled by Customer" || o.status === "Cancelled").length },
                       ].map((item) => (
@@ -1830,134 +2250,247 @@ export default function Admin() {
                       ))}
                     </div>
 
-                    <div className="admin-toolbar">
-                      <div className="admin-search">
-                        <Search size={18} />
-                        <input
-                          value={query}
-                          onChange={(e) => setQuery(e.target.value)}
-                          placeholder="Search by customer, phone, city, address or product/SKU"
-                          aria-label="Search orders"
-                        />
-                      </div>
-                      <Choice
-                        label="Filter order status"
-                        value={filter}
-                        onChange={setFilter}
-                        items={["All statuses", ...statuses]}
-                      />
-                    </div>
-                    <div className="product-bulk-bar" style={{ background: "#f8fafc", borderBottom: "1px solid #edf0f4", padding: "10px 20px" }}>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, color: "#334155", cursor: "pointer" }}>
-                        <input
-                          type="checkbox"
-                          checked={filteredOrders.length > 0 && filteredOrders.every((o) => selectedOrderIds.includes(o.id))}
-                          onChange={(e) => {
-                            setSelectedOrderIds(
-                              e.target.checked
-                                ? Array.from(new Set([...selectedOrderIds, ...filteredOrders.map((o) => o.id)]))
-                                : selectedOrderIds.filter((id) => !filteredOrders.some((o) => o.id === id))
-                            );
-                          }}
-                          style={{ accentColor: "#203664", width: 16, height: 16 }}
-                        />
-                        Select all visible
-                      </label>
-                      <span style={{ fontSize: 12, color: "#64748b" }}>
-                        {selectedOrderIds.length} selected
-                      </span>
-                      <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+                    {/* Universal Search & Collapsible Advanced Filters */}
+                    <div className="orders-toolbar-container">
+                      <div className="admin-toolbar" style={{ borderBottom: "none", paddingBottom: advancedFiltersOpen ? 10 : undefined }}>
+                        <div className="admin-search" style={{ flex: 1 }}>
+                          <Search size={18} />
+                          <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder="Search by customer name, phone, city, address, order ID, or product/SKU…"
+                            aria-label="Search orders"
+                          />
+                          {query && (
+                            <button
+                              type="button"
+                              onClick={() => setQuery("")}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", padding: 4 }}
+                              title="Clear search query"
+                            >
+                              <X size={15} />
+                            </button>
+                          )}
+                        </div>
+
                         <button
                           type="button"
-                          className="admin-secondary"
-                          style={{ padding: "6px 14px", fontSize: 12, gap: 6, background: "#f0fdf4", color: "#166534", border: "1px solid #86efac" }}
-                          disabled={!selectedOrderIds.length || busy}
-                          onClick={async () => {
-                            const nowStr = new Date().toISOString();
-                            for (const id of selectedOrderIds) {
-                              const target = orders.find(o => o.id === id);
-                              if (target) {
-                                const historyEntry: CsrHistoryEntry = {
-                                  id: Math.random().toString(36).slice(2, 9),
-                                  time: nowStr,
-                                  status: "Confirmed",
-                                  note: "Bulk CSR Verified",
-                                  agent: data?.name || "CSR Agent",
-                                };
-                                await write({
-                                  action: "order",
-                                  id,
-                                  csrStatus: "Confirmed",
-                                  csrConfirmedAt: nowStr,
-                                  csrAgent: data?.name || "CSR Agent",
-                                  csrHistory: [historyEntry, ...(target.details.csrHistory || [])],
-                                });
-                              }
-                            }
-                            setData((curr) => curr ? {
-                              ...curr,
-                              orders: curr.orders.map((o) => selectedOrderIds.includes(o.id) ? {
-                                ...o,
-                                details: {
-                                  ...o.details,
-                                  csrStatus: "Confirmed",
-                                  csrConfirmedAt: nowStr,
-                                  csrAgent: data?.name || "CSR Agent",
+                          className={`admin-secondary ${advancedFiltersOpen || dateFilter !== "all" || cityFilter !== "all" || courierFilter !== "all" || rtoRiskFilter !== "all" ? "active-filter-btn" : ""}`}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 12, fontWeight: 600 }}
+                          onClick={() => setAdvancedFiltersOpen((prev) => !prev)}
+                        >
+                          <Filter size={15} />
+                          <span>Filters</span>
+                          {(dateFilter !== "all" || cityFilter !== "all" || courierFilter !== "all" || rtoRiskFilter !== "all") && (
+                            <span className="active-filter-dot" />
+                          )}
+                          <ChevronDown size={14} style={{ transform: advancedFiltersOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }} />
+                        </button>
+
+                        {(query || dateFilter !== "all" || cityFilter !== "all" || courierFilter !== "all" || rtoRiskFilter !== "all" || filter !== "All" || csrFilter !== "all") && (
+                          <button
+                            type="button"
+                            className="admin-secondary"
+                            style={{ padding: "8px 12px", fontSize: 12, color: "#dc2626", borderColor: "#fca5a5" }}
+                            onClick={() => {
+                              setQuery("");
+                              setFilter("All");
+                              setCsrFilter("all");
+                              setDateFilter("all");
+                              setCityFilter("all");
+                              setCourierFilter("all");
+                              setRtoRiskFilter("all");
+                            }}
+                            title="Reset all filters"
+                          >
+                            <RotateCcw size={13} /> Reset
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Collapsible Advanced Filters Panel */}
+                      {advancedFiltersOpen && (
+                        <div className="advanced-filters-panel">
+                          <div className="filter-group">
+                            <label>📅 Date Preset:</label>
+                            <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as any)}>
+                              <option value="all">All Dates</option>
+                              <option value="today">Today</option>
+                              <option value="yesterday">Yesterday</option>
+                              <option value="7days">Last 7 Days</option>
+                              <option value="30days">Last 30 Days</option>
+                            </select>
+                          </div>
+
+                          <div className="filter-group">
+                            <label>📍 Destination City:</label>
+                            <select value={cityFilter} onChange={(e) => setCityFilter(e.target.value)}>
+                              <option value="all">All Cities ({uniqueCities.length})</option>
+                              {uniqueCities.map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="filter-group">
+                            <label>🚚 Courier Partner:</label>
+                            <select value={courierFilter} onChange={(e) => setCourierFilter(e.target.value)}>
+                              <option value="all">All Couriers</option>
+                              <option value="trax">Trax Logistics</option>
+                              <option value="tcs">TCS Express</option>
+                              <option value="leopard">Leopards Courier</option>
+                              <option value="postex">PostEx</option>
+                              <option value="rider">Direct Rider / Self</option>
+                            </select>
+                          </div>
+
+                          <div className="filter-group">
+                            <label>⚠️ RTO / Fraud Risk:</label>
+                            <select value={rtoRiskFilter} onChange={(e) => setRtoRiskFilter(e.target.value as any)}>
+                              <option value="all">All Risk Levels</option>
+                              <option value="normal">Normal Orders</option>
+                              <option value="high">High Risk / Returned</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Contextual Bulk Action Floating Bar (Only shown when 1+ selected) */}
+                    {selectedOrderIds.length > 0 && (
+                      <div className="bulk-action-floating-bar">
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span className="bulk-select-count">
+                            ✓ <b>{selectedOrderIds.length}</b> {selectedOrderIds.length === 1 ? "order" : "orders"} selected
+                          </span>
+                          <button
+                            type="button"
+                            className="bulk-deselect-btn"
+                            onClick={() => setSelectedOrderIds([])}
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                          <button
+                            type="button"
+                            className="bulk-action-btn csr"
+                            disabled={busy}
+                            onClick={async () => {
+                              const nowStr = new Date().toISOString();
+                              for (const id of selectedOrderIds) {
+                                const target = orders.find((o) => o.id === id);
+                                if (target) {
+                                  const historyEntry: CsrHistoryEntry = {
+                                    id: Math.random().toString(36).slice(2, 9),
+                                    time: nowStr,
+                                    status: "Confirmed",
+                                    note: "Bulk CSR Verified",
+                                    agent: data?.name || "CSR Agent",
+                                  };
+                                  await write({
+                                    action: "order",
+                                    id,
+                                    csrStatus: "Confirmed",
+                                    csrConfirmedAt: nowStr,
+                                    csrAgent: data?.name || "CSR Agent",
+                                    csrHistory: [historyEntry, ...(target.details.csrHistory || [])],
+                                  });
                                 }
-                              } : o)
-                            } : curr);
-                            toast.success(`${selectedOrderIds.length} orders marked as CSR Confirmed.`);
-                            setSelectedOrderIds([]);
-                          }}
-                        >
-                          <CheckCircle2 size={14} /> Bulk CSR Confirm ({selectedOrderIds.length})
-                        </button>
-                        <button
-                          type="button"
-                          className="admin-primary"
-                          style={{ padding: "6px 14px", fontSize: 12, gap: 6 }}
-                          disabled={!selectedOrderIds.length}
-                          onClick={() => {
-                            const selectedList = orders.filter((o) => selectedOrderIds.includes(o.id));
-                            setAirwayBillOrders(selectedList);
-                          }}
-                        >
-                          <Printer size={14} /> Print Airway Bills ({selectedOrderIds.length})
-                        </button>
-                        <button
-                          type="button"
-                          className="admin-secondary"
-                          style={{ padding: "6px 14px", fontSize: 12, gap: 6 }}
-                          disabled={!selectedOrderIds.length || busy}
-                          onClick={async () => {
-                            for (const id of selectedOrderIds) {
-                              await write({ action: "order", id, status: "Shipped" });
-                            }
-                            setData((curr) => curr ? {
-                              ...curr,
-                              orders: curr.orders.map((o) => selectedOrderIds.includes(o.id) ? { ...o, status: "Shipped" } : o)
-                            } : curr);
-                            toast.success(`${selectedOrderIds.length} orders marked as Shipped.`);
-                            setSelectedOrderIds([]);
-                          }}
-                        >
-                          <Truck size={14} /> Mark Shipped
-                        </button>
+                              }
+                              setData((curr) => curr ? {
+                                ...curr,
+                                orders: curr.orders.map((o) => selectedOrderIds.includes(o.id) ? {
+                                  ...o,
+                                  details: {
+                                    ...o.details,
+                                    csrStatus: "Confirmed",
+                                    csrConfirmedAt: nowStr,
+                                    csrAgent: data?.name || "CSR Agent",
+                                  }
+                                } : o)
+                              } : curr);
+                              toast.success(`${selectedOrderIds.length} orders marked as CSR Confirmed`);
+                              setSelectedOrderIds([]);
+                            }}
+                          >
+                            <CheckCircle2 size={14} /> Bulk CSR Confirm ({selectedOrderIds.length})
+                          </button>
+
+                          <button
+                            type="button"
+                            className="bulk-action-btn picklist"
+                            disabled={busy}
+                            onClick={async () => {
+                              for (const id of selectedOrderIds) {
+                                await write({ action: "order", id, status: "Picklist" });
+                              }
+                              setData((curr) => curr ? {
+                                ...curr,
+                                orders: curr.orders.map((o) => selectedOrderIds.includes(o.id) ? { ...o, status: "Picklist" } : o)
+                              } : curr);
+                              toast.success(`${selectedOrderIds.length} orders moved to Picklist`);
+                              setSelectedOrderIds([]);
+                            }}
+                          >
+                            <Package size={14} /> Add to Picklist ({selectedOrderIds.length})
+                          </button>
+
+                          <button
+                            type="button"
+                            className="bulk-action-btn print"
+                            onClick={() => {
+                              const selectedList = orders.filter((o) => selectedOrderIds.includes(o.id));
+                              setAirwayBillOrders(selectedList);
+                            }}
+                          >
+                            <Printer size={14} /> Print Airway Bills ({selectedOrderIds.length})
+                          </button>
+
+                          <button
+                            type="button"
+                            className="bulk-action-btn shipped"
+                            disabled={busy}
+                            onClick={async () => {
+                              for (const id of selectedOrderIds) {
+                                await write({ action: "order", id, status: "Shipped" });
+                              }
+                              setData((curr) => curr ? {
+                                ...curr,
+                                orders: curr.orders.map((o) => selectedOrderIds.includes(o.id) ? { ...o, status: "Shipped" } : o)
+                              } : curr);
+                              toast.success(`${selectedOrderIds.length} orders marked as Shipped`);
+                              setSelectedOrderIds([]);
+                            }}
+                          >
+                            <Truck size={14} /> Mark Shipped ({selectedOrderIds.length})
+                          </button>
+                        </div>
                       </div>
-                    </div>
+                    )}
+
                     {filteredOrders.length || !orders.length ? (
                       <OrderTable rows={filteredOrders} />
                     ) : (
                       <div className="admin-empty">
                         <Search />
                         <h3>No matching orders</h3>
+                        <p>No orders match the current search or filters.</p>
                         <button
+                          type="button"
+                          className="admin-secondary"
                           onClick={() => {
                             setQuery("");
-                            setFilter("All statuses");
+                            setFilter("All");
+                            setCsrFilter("all");
+                            setDateFilter("all");
+                            setCityFilter("all");
+                            setCourierFilter("all");
+                            setRtoRiskFilter("all");
                           }}
                         >
-                          Clear filters
+                          <RotateCcw size={14} /> Clear all filters
                         </button>
                       </div>
                     )}
@@ -3732,6 +4265,111 @@ export default function Admin() {
         </DialogContent>
       </Dialog>
 
+      {/* Cancel Order Confirmation Dialog */}
+      <Dialog
+        open={!!cancelModalOrder}
+        onOpenChange={(open) => {
+          if (!open && !busy) setCancelModalOrder(null);
+        }}
+      >
+        <DialogContent className="admin-dialog" style={{ maxWidth: 520 }}>
+          <DialogHeader>
+            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, color: "#b91c1c" }}>
+              <AlertTriangle size={20} />
+              Cancel Order #{cancelModalOrder?.id}
+            </DialogTitle>
+            <DialogDescription>
+              Select a cancellation reason for store records and CSR audit logs.
+            </DialogDescription>
+          </DialogHeader>
+
+          {cancelModalOrder && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", fontSize: 12 }}>
+                <div style={{ fontWeight: 700, color: "#991b1b" }}>Customer: {cancelModalOrder.details.name} (📞 {cancelModalOrder.details.phone})</div>
+                <div style={{ color: "#7f1d1d", marginTop: 2 }}>Amount: <b>{money(cancelModalOrder.total)}</b> · City: {cancelModalOrder.details.city}</div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>
+                  Cancellation Reason:
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {[
+                    "Customer changed mind / duplicate order",
+                    "Customer unreachable after multiple CSR calls",
+                    "Fake or bogus contact details",
+                    "Out of stock / inventory shortage",
+                    "Delivery address unserviceable by courier",
+                    "Price / COD dispute",
+                    "Other reason",
+                  ].map((reason) => (
+                    <label
+                      key={reason}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontSize: 12,
+                        color: "#1e293b",
+                        padding: "6px 10px",
+                        borderRadius: 6,
+                        border: cancelReason === reason ? "1px solid #ef4444" : "1px solid #e2e8f0",
+                        background: cancelReason === reason ? "#fff5f5" : "#ffffff",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="cancelReasonRadio"
+                        checked={cancelReason === reason}
+                        onChange={() => setCancelReason(reason)}
+                        style={{ accentColor: "#ef4444" }}
+                      />
+                      {reason}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 4 }}>
+                  Internal CSR Note (Optional):
+                </label>
+                <textarea
+                  value={cancelCustomNote}
+                  onChange={(e) => setCancelCustomNote(e.target.value)}
+                  placeholder="Add any extra details (e.g. customer stated they ordered by mistake)…"
+                  rows={2}
+                  style={{ width: "100%", border: "1px solid #cbd5e1", borderRadius: 6, padding: "6px 10px", fontSize: 12 }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="admin-secondary"
+                  onClick={() => setCancelModalOrder(null)}
+                  disabled={busy}
+                >
+                  Keep Order
+                </button>
+                <button
+                  type="button"
+                  className="admin-primary"
+                  style={{ background: "#dc2626", color: "#ffffff" }}
+                  disabled={busy}
+                  onClick={() => handleCancelOrder(cancelModalOrder, cancelReason, cancelCustomNote)}
+                >
+                  {busy ? "Cancelling…" : "Confirm Cancellation"}
+                </button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Side Sheet Drawer for Order Details */}
       <Sheet
         open={!!selected}
         onOpenChange={(open) => {
@@ -3740,63 +4378,97 @@ export default function Admin() {
       >
         <SheetContent className="admin-order-sheet">
           <SheetHeader>
-            <SheetTitle>{selected?.id}</SheetTitle>
-            <SheetDescription>Order Summary · Cash on Delivery</SheetDescription>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <SheetTitle style={{ fontSize: 17, fontWeight: 800 }}>Order #{selected?.id}</SheetTitle>
+              {selected && <CsrBadge status={selected.details.csrStatus} time={selected.details.csrConfirmedAt} />}
+            </div>
+            <SheetDescription>
+              {selected?.created_at ? new Date(selected.created_at).toLocaleString("en-PK", { dateStyle: "medium", timeStyle: "short" }) : "Recent Order"} · Cash on Delivery
+            </SheetDescription>
           </SheetHeader>
           {selected && (
             <div className="admin-order-details">
-              <div className="admin-setting-note">
-                <Package size={20} />
-                <p>
-                  Updating status records your progress and updates the live order tracking.
-                </p>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f8fafc", padding: "10px 14px", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                <div>
+                  <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Current Status</span>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: selected.status === "Cancelled" ? "#dc2626" : "#203664" }}>
+                    {selected.status}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Total COD</span>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "#059669" }}>
+                    {money(selected.total)}
+                  </div>
+                </div>
               </div>
 
-              <h3>Customer Information</h3>
-              <b>{selected.details.name}</b>
-              <p>
-                📞 {selected.details.phone}
-                {selected.details.phone && (
+              <h3>Customer & Contact</h3>
+              <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <b>{selected.details.name}</b>
+                  {(() => {
+                    const h = getCustomerHistory(orders, selected.details.phone, selected.id);
+                    return h.isFirstOrder ? (
+                      <span className="order-customer-history-tag">✨ 1st Order</span>
+                    ) : (
+                      <span className={`order-customer-history-tag ${h.rtoCount > 0 ? "risk" : "loyal"}`}>
+                        {h.count} Orders · {h.deliveredCount} Delv{h.rtoCount > 0 ? ` · ⚠️ ${h.rtoCount} RTO` : ""}
+                      </span>
+                    );
+                  })()}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 12, color: "#475569" }}>
+                  📞 <b>{selected.details.phone}</b>
+                  {selected.details.alternatePhone && <span> · Alt: {selected.details.alternatePhone}</span>}
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <a
+                    href={`tel:${selected.details.phone.replace(/[^0-9+]/g, "")}`}
+                    className="csr-btn csr-btn-call"
+                    style={{ fontSize: 11, padding: "4px 8px" }}
+                  >
+                    <Phone size={12} /> Call
+                  </a>
                   <a
                     href={`https://wa.me/${selected.details.phone.replace(/[^0-9]/g, "").replace(/^0/, "92")}`}
                     target="_blank"
                     rel="noreferrer"
-                    style={{ marginLeft: 8, color: "#16a34a", fontSize: 12, fontWeight: 600 }}
+                    className="csr-btn csr-btn-whatsapp"
+                    style={{ fontSize: 11, padding: "4px 8px" }}
                   >
-                    💬 WhatsApp Chat
+                    <MessageCircle size={12} /> WhatsApp
                   </a>
-                )}
-                {selected.details.email && (
-                  <>
-                    <br />
-                    ✉️ {selected.details.email}
-                  </>
-                )}
-              </p>
+                  <button
+                    type="button"
+                    className="csr-btn csr-btn-verify"
+                    style={{ fontSize: 11, padding: "4px 8px" }}
+                    onClick={() => openCsrModal(selected)}
+                  >
+                    <PhoneCall size={12} /> CSR Log
+                  </button>
+                </div>
+              </div>
 
               <h3>Delivery Destination</h3>
-              <p>
-                <b>Address:</b> {selected.details.address}
-                <br />
-                <b>City / Province:</b> {selected.details.city}{selected.details.province ? `, ${selected.details.province}` : ""}, Pakistan
+              <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, fontSize: 12 }}>
+                <div><b>City:</b> {selected.details.city}{selected.details.province ? `, ${selected.details.province}` : ""}, Pakistan</div>
+                <div style={{ marginTop: 4 }}><b>Address:</b> {selected.details.address}</div>
                 {selected.details.landmark && (
-                  <>
-                    <br />
-                    <b>Nearby Landmark:</b> {selected.details.landmark}
-                  </>
+                  <div style={{ marginTop: 4, color: "#64748b" }}><b>Landmark:</b> {selected.details.landmark}</div>
                 )}
-              </p>
+              </div>
 
               {selected.details.note && (
                 <>
                   <h3>Customer Order Note</h3>
-                  <p style={{ background: "#f8fafc", padding: "8px 12px", borderRadius: 6, border: "1px solid #e2e8f0", fontStyle: "italic" }}>
+                  <p style={{ background: "#f8fafc", padding: "8px 12px", borderRadius: 6, border: "1px solid #e2e8f0", fontStyle: "italic", fontSize: 12 }}>
                     "{selected.details.note}"
                   </p>
                 </>
               )}
 
-              <h3>Ordered Items</h3>
+              <h3>Ordered Items ({selected.items.length})</h3>
               {selected.items.map((i, n) => {
                 const prod = products.find((p) => p.id === i.id);
                 const itemImg = i.image
@@ -3804,11 +4476,9 @@ export default function Admin() {
                   : prod ? photo(prod) : "/images/placeholder.jpg";
                 return (
                   <div className="admin-order-item" key={n} style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <img src={itemImg} alt={i.name || i.id} style={{ width: 42, height: 42, borderRadius: 6, objectFit: "cover", border: "1px solid #e2e8f0" }} />
+                    <img src={itemImg} alt={i.name || i.id} style={{ width: 44, height: 44, borderRadius: 6, objectFit: "cover", border: "1px solid #e2e8f0" }} />
                     <div style={{ flex: 1 }}>
-                      <b>
-                        {i.name || prod?.name || i.id}
-                      </b>
+                      <b>{i.name || prod?.name || i.id}</b>
                       <small>
                         {i.color ? `Color: ${i.color} · ` : ""}{i.size ? `Size: ${i.size} · ` : ""}Qty: {i.qty}
                       </small>
@@ -3825,8 +4495,62 @@ export default function Admin() {
                 <strong>{money(selected.total)}</strong>
               </div>
 
+              {/* Courier & Tracking Section */}
+              <h3>Courier & Consignment</h3>
+              <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span><b>Courier Partner:</b> {selected.details.courier || "Trax Logistics"}</span>
+                  <button
+                    type="button"
+                    className="order-sub-btn"
+                    onClick={() => {
+                      setCourierOrder(selected);
+                      setCourierName(selected.details.courier || "Trax Logistics");
+                      setTrackingNumber(selected.details.trackingNumber || `TRX-${selected.id.replace("ZPK-", "")}`);
+                    }}
+                  >
+                    <Truck size={12} /> Change / Book
+                  </button>
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  <b>Tracking Consignment #:</b> {selected.details.trackingNumber || "Not assigned yet"}
+                  {selected.details.trackingNumber && (
+                    <a
+                      href={getCourierTrackingUrl(selected.details.courier, selected.details.trackingNumber)}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ marginLeft: 8, color: "#2563eb", fontWeight: 600 }}
+                    >
+                      Track Online <ExternalLink size={11} style={{ display: "inline" }} />
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {/* CSR Verification History Timeline */}
+              {selected.details.csrHistory && selected.details.csrHistory.length > 0 && (
+                <>
+                  <h3>CSR History & Timeline</h3>
+                  <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12 }}>
+                    <div className="csr-timeline">
+                      {selected.details.csrHistory.map((item, idx) => (
+                        <div key={item.id || idx} className="csr-timeline-item">
+                          <span style={{ fontWeight: 700, color: "#1e293b" }}>{item.status}</span>
+                          <span style={{ color: "#64748b", marginLeft: 8 }}>
+                            {new Date(item.time).toLocaleString("en-PK", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                          </span>
+                          {item.agent && <span style={{ color: "#3b82f6", marginLeft: 6 }}>({item.agent})</span>}
+                          {item.note && <div style={{ color: "#334155", fontSize: 11.5, marginTop: 2 }}>"{item.note}"</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Status Update Control */}
               <label className="admin-status-label">
-                Update Order Status
+                Manual Status Override
                 <Choice
                   value={status}
                   onChange={setStatus}
@@ -3841,7 +4565,7 @@ export default function Admin() {
                 </p>
               )}
 
-              <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                 <button
                   type="button"
                   className="admin-secondary"
@@ -3854,6 +4578,7 @@ export default function Admin() {
                 >
                   <Printer size={15} /> Print Airway Bill
                 </button>
+
                 <button
                   disabled={busy || selected.status === status}
                   className="admin-primary"
@@ -3877,10 +4602,26 @@ export default function Admin() {
                     }
                   }}
                 >
-                  {busy ? "Saving…" : "Update status"}
-                  <CheckCircle2 size={17} />
+                  {busy ? "Saving…" : "Save Status"}
+                  <CheckCircle2 size={16} />
                 </button>
               </div>
+
+              {selected.status !== "Cancelled" && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e2e8f0", textAlign: "center" }}>
+                  <button
+                    type="button"
+                    style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
+                    onClick={() => {
+                      setCancelModalOrder(selected);
+                      setCancelReason("Customer changed mind / duplicate order");
+                      setCancelCustomNote("");
+                    }}
+                  >
+                    <X size={14} /> Cancel this order
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </SheetContent>
