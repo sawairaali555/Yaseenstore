@@ -48,6 +48,7 @@ import {
   AlertTriangle,
   ChevronDown,
   Eye,
+  MapPin,
 } from "lucide-react";
 import {
   Sidebar,
@@ -1850,10 +1851,10 @@ export default function Admin() {
                         e.target.checked ? Array.from(new Set([...curr, o.id])) : curr.filter((id) => id !== o.id)
                       );
                     }}
-                    style={{ width: 16, height: 16, accentColor: "#203664", cursor: "pointer", flexShrink: 0 }}
+                    style={{ width: 15, height: 15, accentColor: "#203664", cursor: "pointer", flexShrink: 0 }}
                     aria-label={`Select order ${o.id}`}
                   />
-                  <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
                     <button
                       type="button"
                       className="order-id-badge"
@@ -1872,11 +1873,14 @@ export default function Admin() {
                       onClick={() => copyText(o.id, "Order ID")}
                       title="Copy Order ID"
                     >
-                      <Copy size={12} />
+                      <Copy size={11} />
                     </button>
                   </div>
 
-                  <span className="order-time-badge">🕒 {timeFormatted}</span>
+                  <span className="order-time-badge" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <Clock size={11} style={{ opacity: 0.7 }} />
+                    {timeFormatted}
+                  </span>
                   <span className="order-source-badge">
                     {o.details.source ? o.details.source.split(",")[0] : "Web Store"}
                   </span>
@@ -1892,11 +1896,11 @@ export default function Admin() {
                           style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}
                           title="Open official Courier tracking page"
                         >
-                          🚚 {o.details.courier || "Trax"}: {o.details.trackingNumber} <ExternalLink size={10} />
+                          <Truck size={11} /> {o.details.courier || "Trax"}: {o.details.trackingNumber} <ExternalLink size={9} />
                         </a>
                       ) : (
-                        <span className="order-cn-badge">
-                          🚚 {o.details.courier || "Trax"}: {o.details.trackingNumber}
+                        <span className="order-cn-badge" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          <Truck size={11} /> {o.details.courier || "Trax"}: {o.details.trackingNumber}
                         </span>
                       )}
                       <button
@@ -1905,7 +1909,7 @@ export default function Admin() {
                         onClick={() => copyText(o.details.trackingNumber || "", "Tracking Number")}
                         title="Copy Tracking Number"
                       >
-                        <Copy size={12} />
+                        <Copy size={11} />
                       </button>
                     </div>
                   )}
@@ -1928,20 +1932,20 @@ export default function Admin() {
                 <div className="order-customer-col">
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, flexWrap: "wrap" }}>
                     <div className="order-customer-name">
-                      <User size={15} style={{ color: "#4f46e5" }} />
+                      <User size={13} style={{ color: "#64748b" }} />
                       <span>{o.details.name}</span>
                     </div>
 
                     {customerHistory.isFirstOrder ? (
                       <span className="order-customer-history-tag" title="First time customer on store">
-                        ✨ 1st Order
+                        1st Order
                       </span>
                     ) : (
                       <span
                         className={`order-customer-history-tag ${customerHistory.rtoCount > 0 ? "risk" : "loyal"}`}
                         title={`${customerHistory.count} total orders, ${customerHistory.deliveredCount} delivered, ${customerHistory.rtoCount} RTO/returned`}
                       >
-                        {customerHistory.rtoCount > 0 ? "⚠️" : "📦"} {customerHistory.count} Orders · {customerHistory.deliveredCount} Delv{customerHistory.rtoCount > 0 ? ` · ${customerHistory.rtoCount} RTO` : ""}
+                        {customerHistory.count} Orders · {customerHistory.deliveredCount} Delv{customerHistory.rtoCount > 0 ? ` · ${customerHistory.rtoCount} RTO` : ""}
                       </span>
                     )}
                   </div>
@@ -1962,14 +1966,17 @@ export default function Admin() {
                   )}
 
                   <div className="order-phone-row">
-                    <span>📞 <b>{o.details.phone}</b></span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <Phone size={11} style={{ color: "#64748b" }} />
+                      <b>{o.details.phone}</b>
+                    </span>
                     <button
                       type="button"
                       className="copy-btn-mini"
                       onClick={() => copyText(o.details.phone, "Phone Number")}
                       title="Copy phone number"
                     >
-                      <Copy size={12} />
+                      <Copy size={11} />
                     </button>
                     {o.details.alternatePhone && (
                       <span style={{ fontSize: 11, color: "#64748b", background: "#f1f5f9", padding: "1px 6px", borderRadius: 4 }}>
@@ -1980,14 +1987,16 @@ export default function Admin() {
 
                   <div className="order-address-box">
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span className="city-tag">📍 {o.details.city}{o.details.province ? `, ${o.details.province}` : ""}, PK</span>
+                      <span className="city-tag" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        <MapPin size={11} style={{ color: "#64748b" }} /> {o.details.city}{o.details.province ? `, ${o.details.province}` : ""}, PK
+                      </span>
                       <button
                         type="button"
                         className="copy-btn-mini"
                         onClick={() => copyText(`${o.details.name}\n${o.details.phone}\n${o.details.address}, ${o.details.city}${o.details.province ? ", " + o.details.province : ""}`, "Full Delivery Address")}
                         title="Copy full delivery address for rider/courier"
                       >
-                        <Copy size={11} /> Copy Address
+                        <Copy size={10} /> Copy Address
                       </button>
                     </div>
                     <div style={{ marginTop: 3 }}>
@@ -2003,31 +2012,31 @@ export default function Admin() {
                   <div className="order-quick-actions">
                     <a
                       href={`tel:${o.details.phone.replace(/[^0-9+]/g, "")}`}
-                      className="csr-btn csr-btn-call"
+                      className="csr-btn"
                       title="Call customer via dialer"
                     >
-                      <Phone size={13} /> Call
+                      <Phone size={12} style={{ color: "#059669" }} /> Call
                     </a>
 
                     <button
                       type="button"
-                      className="csr-btn csr-btn-whatsapp"
+                      className="csr-btn"
                       title="Send WhatsApp confirmation message in Urdu"
                       onClick={() => {
                         const msg = getWhatsAppConfirmationMessage(o, "urdu", config?.logoText || "Zeliy Pakistan");
                         openWhatsApp(o.details.phone, msg);
                       }}
                     >
-                      <MessageCircle size={13} /> WhatsApp
+                      <MessageCircle size={12} style={{ color: "#16a34a" }} /> WhatsApp
                     </button>
 
                     <button
                       type="button"
-                      className="csr-btn csr-btn-verify"
+                      className="csr-btn"
                       title="Open CSR verification drawer to edit address, log notes, and update verification status"
                       onClick={() => openCsrModal(o)}
                     >
-                      <PhoneCall size={13} /> CSR Log
+                      <PhoneCall size={12} style={{ color: "#475569" }} /> CSR Log
                     </button>
                   </div>
                 </div>
@@ -2102,15 +2111,15 @@ export default function Admin() {
                   <div className="order-stepper-meta">
                     {o.details.trackingNumber ? (
                       <span className="stepper-meta-item">
-                        🚚 <b>{o.details.courier || "Trax"}:</b> {o.details.trackingNumber}
+                        <Truck size={12} style={{ color: "#64748b" }} /> <b>{o.details.courier || "Trax"}:</b> {o.details.trackingNumber}
                       </span>
                     ) : isCsrConfirmed ? (
                       <span className="stepper-meta-item" style={{ color: "#166534" }}>
-                        🟢 CSR Verified by {o.details.csrAgent || "CSR Agent"} {o.details.csrConfirmedAt ? `(${new Date(o.details.csrConfirmedAt).toLocaleDateString("en-PK", { month: "short", day: "numeric" })})` : ""}
+                        <CheckCircle2 size={12} style={{ color: "#16a34a" }} /> CSR Verified by {o.details.csrAgent || "CSR Agent"} {o.details.csrConfirmedAt ? `(${new Date(o.details.csrConfirmedAt).toLocaleDateString("en-PK", { month: "short", day: "numeric" })})` : ""}
                       </span>
                     ) : (
                       <span className="stepper-meta-item" style={{ color: "#a16207" }}>
-                        🟡 Pending customer verification call
+                        <Clock size={12} style={{ color: "#d97706" }} /> Pending customer verification call
                       </span>
                     )}
 
@@ -2153,10 +2162,12 @@ export default function Admin() {
                           borderRadius: 4,
                           fontSize: 10,
                           fontWeight: 500,
-                          display: "inline-block",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 3,
                           marginTop: 2,
                         }}>
-                          📍 PK Warehouse
+                          <MapPin size={9} style={{ color: "#64748b" }} /> PK Warehouse
                         </span>
                       </div>
                     </div>
@@ -2375,7 +2386,7 @@ export default function Admin() {
                         }}
                         title="Book courier & assign tracking consignment number"
                       >
-                        <Truck size={12} style={{ color: "#059669" }} /> Courier
+                        <Truck size={12} style={{ color: "#64748b" }} /> Courier
                       </button>
 
                       <button
@@ -2384,7 +2395,7 @@ export default function Admin() {
                         onClick={() => setHistoryOrder(o)}
                         title="View status logs and CSR timeline"
                       >
-                        <Clock size={12} style={{ color: "#6366f1" }} /> History
+                        <Clock size={12} style={{ color: "#64748b" }} /> History
                       </button>
 
                       <button
@@ -2397,7 +2408,7 @@ export default function Admin() {
                         }}
                         title="View and edit full order details drawer"
                       >
-                        <SlidersHorizontal size={12} style={{ color: "#475569" }} /> Details
+                        <SlidersHorizontal size={12} style={{ color: "#64748b" }} /> Details
                       </button>
 
                       {!isCancelled && (
@@ -2411,7 +2422,7 @@ export default function Admin() {
                           }}
                           title="Cancel order with reason"
                         >
-                          <X size={12} /> Cancel
+                          <X size={12} style={{ color: "#dc2626" }} /> Cancel
                         </button>
                       )}
 
@@ -2433,7 +2444,7 @@ export default function Admin() {
                         }}
                         title="Delete order permanently"
                       >
-                        <Trash2 size={12} /> Delete
+                        <Trash2 size={12} style={{ color: "#dc2626" }} /> Delete
                       </button>
                     </div>
                   </div>
