@@ -1740,12 +1740,10 @@ export default function Admin() {
             <tr>
               <th style={{ width: 44, textAlign: "center" }}>#</th>
               <th>Customer Name</th>
-              <th>Destination</th>
               <th>Time</th>
               <th>Payment</th>
               <th>Price</th>
-              <th>Status</th>
-              <th style={{ textAlign: "right" }}>Action</th>
+              <th style={{ textAlign: "right" }}>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -1774,9 +1772,6 @@ export default function Admin() {
                     </span>
                   </td>
                   <td>
-                    <OrderSourceBadge source={o.details?.source} />
-                  </td>
-                  <td>
                     <span style={{ display: "inline-flex", alignItems: "center", fontSize: 11.5, background: "#f1f5f9", color: "#475569", padding: "3px 8px", borderRadius: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
                       <Clock size={11} style={{ marginRight: 4, opacity: 0.7 }} />
                       {relativeAgo}
@@ -1792,21 +1787,8 @@ export default function Admin() {
                       {money(o.total)}
                     </span>
                   </td>
-                  <td>
-                    <OrderStatusPill status={finalStatus} />
-                  </td>
                   <td style={{ textAlign: "right" }}>
-                    <button
-                      type="button"
-                      className="recent-order-view-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectOrder(o);
-                      }}
-                      title="View full order details"
-                    >
-                      <Eye size={12} /> View Details
-                    </button>
+                    <OrderStatusPill status={finalStatus} />
                   </td>
                 </tr>
               );
