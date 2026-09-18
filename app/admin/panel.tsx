@@ -2360,37 +2360,41 @@ export default function Admin() {
                     {/* Tier 1 Main Orders Tabs */}
                     <div className="orders-main-tabs">
                       {[
-                        { id: "overview" as OrderMainTab, label: "Overview", count: orders.length },
-                        { id: "new_csr" as OrderMainTab, label: "New & CSR", count: orders.filter((o) => ["Pending", "Test order received", "New", "Placed"].includes(o.status) || (!o.details.csrStatus || o.details.csrStatus === "Pending") || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")).length },
-                        { id: "fulfillment" as OrderMainTab, label: "Fulfillment", count: orders.filter((o) => o.status === "Picklist" || ["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) || (o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status))).length },
-                        { id: "shipping" as OrderMainTab, label: "Shipping", count: orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) || (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber)).length },
-                        { id: "completed" as OrderMainTab, label: "Completed", count: orders.filter((o) => o.status === "Delivered").length },
-                        { id: "issues_returns" as OrderMainTab, label: "Issues & Returns", count: orders.filter((o) => ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) || o.details.rtoRisk === "high" || o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer" || o.details.returnStatus === "Requested").length },
-                      ].map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          className={`orders-main-tab ${orderMainTab === tab.id ? "active" : ""}`}
-                          onClick={() => {
-                            setOrderMainTab(tab.id);
-                            const currentSubs: Record<OrderMainTab, string[]> = {
-                              overview: ["all", "csr_confirmation", "needs_attention", "today"],
-                              new_csr: ["all", "csr_confirmation", "callback", "no_answer", "whatsapp", "confirmed", "cancelled"],
-                              fulfillment: ["confirmed", "picklist", "packing", "ready_to_ship"],
-                              shipping: ["ready_to_ship", "shipped", "in_transit", "out_for_delivery", "failed_delivery"],
-                              completed: ["delivered", "cod_pending", "cod_collected"],
-                              issues_returns: ["on_hold", "cancelled", "failed_delivery", "return_requested", "returned", "rto", "refunds"],
-                            };
-                            const available = currentSubs[tab.id];
-                            if (available && !available.includes(orderSubTab)) {
-                              setOrderSubTab(available[0]);
-                            }
-                          }}
-                        >
-                          {tab.label}
-                          <span className="badge">{tab.count}</span>
-                        </button>
-                      ))}
+                        { id: "overview" as OrderMainTab, label: "Overview", icon: ShoppingBag, count: orders.length },
+                        { id: "new_csr" as OrderMainTab, label: "New & CSR", icon: PhoneCall, count: orders.filter((o) => ["Pending", "Test order received", "New", "Placed"].includes(o.status) || (!o.details.csrStatus || o.details.csrStatus === "Pending") || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")).length },
+                        { id: "fulfillment" as OrderMainTab, label: "Fulfillment", icon: Package, count: orders.filter((o) => o.status === "Picklist" || ["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) || (o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status))).length },
+                        { id: "shipping" as OrderMainTab, label: "Shipping", icon: Truck, count: orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) || (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber)).length },
+                        { id: "completed" as OrderMainTab, label: "Completed", icon: CheckCircle2, count: orders.filter((o) => o.status === "Delivered").length },
+                        { id: "issues_returns" as OrderMainTab, label: "Issues & Returns", icon: AlertTriangle, count: orders.filter((o) => ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) || o.details.rtoRisk === "high" || o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer" || o.details.returnStatus === "Requested").length },
+                      ].map((tab) => {
+                        const TabIcon = tab.icon;
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            className={`orders-main-tab ${orderMainTab === tab.id ? "active" : ""}`}
+                            onClick={() => {
+                              setOrderMainTab(tab.id);
+                              const currentSubs: Record<OrderMainTab, string[]> = {
+                                overview: ["all", "csr_confirmation", "needs_attention", "today"],
+                                new_csr: ["all", "csr_confirmation", "callback", "no_answer", "whatsapp", "confirmed", "cancelled"],
+                                fulfillment: ["confirmed", "picklist", "packing", "ready_to_ship"],
+                                shipping: ["ready_to_ship", "shipped", "in_transit", "out_for_delivery", "failed_delivery"],
+                                completed: ["delivered", "cod_pending", "cod_collected"],
+                                issues_returns: ["on_hold", "cancelled", "failed_delivery", "return_requested", "returned", "rto", "refunds"],
+                              };
+                              const available = currentSubs[tab.id];
+                              if (available && !available.includes(orderSubTab)) {
+                                setOrderSubTab(available[0]);
+                              }
+                            }}
+                          >
+                            <TabIcon size={14} />
+                            {tab.label}
+                            <span className="badge">{tab.count}</span>
+                          </button>
+                        );
+                      })}
                     </div>
 
                     {/* Tier 2 Secondary Sub-Tabs (Dynamic based on selected main tab) */}
