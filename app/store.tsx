@@ -15,8 +15,8 @@ const sizeOptions=(p:Product)=>p.sizes?.length?p.sizes:((p.name+" "+p.category+"
 const hasSizes=(p:Product)=>sizeOptions(p).length>1||sizeOptions(p)[0]!=="Standard";
 const sizeStockEntries=(p:Product)=>Object.values(p.sizeStock||{}).map(Number);
 const hasSizeStock=(p:Product)=>sizeStockEntries(p).length>0;
-const stockFor=(p:Product,size:string)=>hasSizeStock(p)?Number(p.sizeStock?.[size]||0):Number(p.stock);
-const inStock=(p:Product)=>Number(p.stock)>0||sizeStockEntries(p).some(v=>v>0);
+const stockFor=(p:Product,size:string)=>hasSizeStock(p)?Number(p.sizeStock?.[size]||0):(p.stock!==undefined?Number(p.stock):50);
+const inStock=(p:Product)=>(p.status==='Active'||!p.status)&&(hasSizeStock(p)?sizeStockEntries(p).some(v=>v>0):(p.stock!==undefined?Number(p.stock)>0:true));
 const addWorkingDays=(date:Date,days:number)=>{const next=new Date(date);let added=0;while(added<days){next.setDate(next.getDate()+1);const day=next.getDay();if(day!==0&&day!==6)added+=1}return next};
 const estimatedDelivery=()=>addWorkingDays(new Date(),3).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
 function Choice({value,onChange,items,label}:{value:string;onChange:(v:string)=>void;items:string[];label:string}){return <Select value={value} onValueChange={onChange}><SelectTrigger aria-label={label}><SelectValue/></SelectTrigger><SelectContent>{items.map(v=><SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent></Select>}

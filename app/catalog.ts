@@ -27,6 +27,8 @@ export const products = [
       "Slip-on design with pull tabs",
     ],
     sizes: ["37", "38", "39", "40", "41", "42"],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "fashion-sneakers-grey",
@@ -47,6 +49,8 @@ export const products = [
       "Lightweight construction",
     ],
     sizes: ["37", "38", "39", "40", "41", "42"],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "european-backpack-handbag",
@@ -68,6 +72,8 @@ export const products = [
       "Teddy bear charm included",
     ],
     sizes: ["Standard"],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "fashion-sneakers-purple",
@@ -88,6 +94,8 @@ export const products = [
       "Slip-resistant rubber sole",
     ],
     sizes: ["37", "38", "39", "40", "41", "42"],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "designer-embroidered-handbag",
@@ -108,6 +116,8 @@ export const products = [
       "Secure zipper closure with gold hardware",
     ],
     sizes: ["Standard"],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "everyday-headphones",
@@ -126,6 +136,8 @@ export const products = [
       "Adjustable padded headband",
       "Includes charging cable",
     ],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "classic-handbag",
@@ -144,6 +156,8 @@ export const products = [
       "Easy-access closure",
       "Adjustable shoulder strap",
     ],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "daily-sneakers",
@@ -164,6 +178,8 @@ export const products = [
     ],
     offerPrice: 4290,
     offerEnd: "2026-12-31T23:59:59Z",
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "daily-serum",
@@ -178,6 +194,8 @@ export const products = [
     description:
       "A simple addition to your daily skincare routine. Apply a small amount to clean skin and follow with moisturiser. Patch test before use.",
     features: ["30 ml bottle", "Dropper applicator", "For external use only"],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "smart-watch",
@@ -196,6 +214,8 @@ export const products = [
       "Adjustable strap",
       "Charging cable included",
     ],
+    stock: 50,
+    status: "Active" as const,
   },
   {
     id: "kitchen-cookware",
@@ -214,6 +234,8 @@ export const products = [
       "Easy-grip handle",
       "Hand washing recommended",
     ],
+    stock: 50,
+    status: "Active" as const,
   },
 ];
 export type Product = (typeof products)[number] & {

@@ -160,8 +160,8 @@ export default function ProductDetail({
   const sizeOptions = configuredSizes.length > 0 ? configuredSizes : allSizeOptions;
   const hasSizeOptions = sizeOptions.length > 1 || (sizeOptions.length === 1 && sizeOptions[0] !== "Standard");
 
-  const stockForSize = (selected: string) => hasSizeStock ? Number(sizeStock?.[selected] || 0) : Number(p.stock || 0);
-  const inStock = p.status === "Active" && (hasSizeStock ? Object.values(sizeStock).some((value) => Number(value) > 0) : Number(p.stock || 0) > 0);
+  const stockForSize = (selected: string) => hasSizeStock ? Number(sizeStock?.[selected] || 0) : (p.stock !== undefined ? Number(p.stock) : 50);
+  const inStock = (p.status === "Active" || !p.status) && (hasSizeStock ? Object.values(sizeStock).some((value) => Number(value) > 0) : (p.stock !== undefined ? Number(p.stock) > 0 : true));
   const selectedInStock = inStock && stockForSize(hasSizeOptions ? size : "Standard") > 0;
   const availableForSelected = stockForSize(hasSizeOptions ? size : "Standard");
   const quantityLimit = Math.max(0, Math.min(10, availableForSelected));
