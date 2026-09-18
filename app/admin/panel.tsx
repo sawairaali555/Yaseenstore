@@ -2069,15 +2069,30 @@ export default function Admin() {
                         const isPassed = currentStepIdx > idx;
                         const isActive = isCurrent || isPassed;
                         return (
-                          <div
+                          <button
+                            type="button"
                             key={step.id}
-                            className={`milestone-step-display ${isActive ? "active" : ""} ${isCurrent ? "current" : ""} ${isPassed ? "passed" : ""}`}
+                            disabled={busy}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (o.status === step.id) return;
+                              const ok = await write({ action: "order", id: o.id, status: step.id });
+                              if (ok) {
+                                setData((curr) => curr ? {
+                                  ...curr,
+                                  orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: step.id } : item)
+                                } : curr);
+                                toast.success(`Order ${o.id} moved to ${step.label}`);
+                              }
+                            }}
+                            className={`milestone-step-display clickable ${isActive ? "active" : ""} ${isCurrent ? "current" : ""} ${isPassed ? "passed" : ""}`}
+                            title={`Click to update stage to: ${step.label}`}
                           >
                             <div className="milestone-circle">
                               {isPassed ? <Check size={13} /> : <StepIcon size={12} />}
                             </div>
                             <span className="milestone-label">{step.label}</span>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -5268,18 +5283,56 @@ export default function Admin() {
           </SheetHeader>
           {selected && (
             <div className="admin-order-details">
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f8fafc", padding: "10px 14px", borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                <div>
-                  <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Current Status</span>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: selected.status === "Cancelled" ? "#dc2626" : "#203664" }}>
-                    {selected.status}
+              <div style={{ background: "#f8fafc", padding: "12px 14px", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div>
+                    <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Current Status</span>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: selected.status === "Cancelled" ? "#dc2626" : "#203664" }}>
+                      {selected.status}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Total COD</span>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "#059669" }}>
+                      {money(selected.total)}
+                    </div>
                   </div>
                 </div>
-                <div style={{ textAlign: "right" }}>
-                  <span style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Total COD</span>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: "#059669" }}>
-                    {money(selected.total)}
-                  </div>
+
+                <div className="order-milestone-stepper" style={{ background: "#ffffff", padding: "10px 8px", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                  {pipelineSteps.map((step, idx) => {
+                    const StepIcon = step.icon;
+                    const curIdx = getStepIndex(selected.status);
+                    const isCurrent = curIdx === idx;
+                    const isPassed = curIdx > idx;
+                    const isActive = isCurrent || isPassed;
+                    return (
+                      <button
+                        type="button"
+                        key={step.id}
+                        disabled={busy}
+                        onClick={async () => {
+                          if (selected.status === step.id) return;
+                          const ok = await write({ action: "order", id: selected.id, status: step.id });
+                          if (ok) {
+                            setSelected((curr) => curr ? { ...curr, status: step.id } : curr);
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.map((item) => item.id === selected.id ? { ...item, status: step.id } : item)
+                            } : curr);
+                            toast.success(`Order #${selected.id} updated to ${step.label}`);
+                          }
+                        }}
+                        className={`milestone-step-display clickable ${isActive ? "active" : ""} ${isCurrent ? "current" : ""} ${isPassed ? "passed" : ""}`}
+                        title={`Click to update stage to: ${step.label}`}
+                      >
+                        <div className="milestone-circle">
+                          {isPassed ? <Check size={13} /> : <StepIcon size={12} />}
+                        </div>
+                        <span className="milestone-label">{step.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
