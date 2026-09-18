@@ -5750,60 +5750,68 @@ export default function Admin() {
           if (!open && !busy) setManualOrderModalOpen(false);
         }}
       >
-        <DialogContent className="admin-dialog" style={{ maxWidth: 880, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
+        <DialogContent className="admin-dialog admin-dialog-manual-order sm:max-w-6xl" style={{ maxWidth: "min(1180px, 96vw)", width: "96vw", maxHeight: "92vh", overflowY: "auto", padding: "28px 32px" }}>
           <DialogHeader>
-            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 18, color: "#1e293b" }}>
-              <ShoppingBag size={20} style={{ color: "#16a34a" }} /> Place Manual Order
+            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 20, fontWeight: 700, color: "#0f172a" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, background: "#dcfce7", color: "#16a34a" }}>
+                <ShoppingBag size={20} />
+              </span>
+              Place Manual Order
             </DialogTitle>
-            <DialogDescription>
-              Record phone, WhatsApp, Instagram, or counter walk-in orders with real-time stock deduction.
+            <DialogDescription style={{ fontSize: 13.5, color: "#64748b", marginTop: 4 }}>
+              Record phone, WhatsApp, Instagram, or counter walk-in orders with real-time stock deduction and automated tracking.
             </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={handleCreateManualOrder}>
-            <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 20, marginTop: 14 }}>
+            <div className="manual-order-grid" style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 28, marginTop: 18 }}>
               {/* Left Column: Customer & Delivery Info */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                  <User size={15} style={{ color: "#4f46e5" }} /> 1. Customer &amp; Delivery Details
-                </h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, borderBottom: "1px solid #f1f5f9" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 6, background: "#ede9fe", color: "#6366f1" }}>
+                    <User size={15} />
+                  </span>
+                  <h4 style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", margin: 0 }}>
+                    1. Customer &amp; Delivery Details
+                  </h4>
+                </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Customer Full Name *</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Customer Full Name *</label>
                   <input
                     required
                     placeholder="e.g. Muhammad Ali"
                     value={manualCustomerName}
                     onChange={(e) => setManualCustomerName(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
                   />
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Mobile Phone *</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Mobile Phone *</label>
                     <input
                       required
                       placeholder="0300 1234567"
                       value={manualCustomerPhone}
                       onChange={(e) => setManualCustomerPhone(e.target.value)}
-                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                      style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
                     />
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Alt Phone (Optional)</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Alt Phone (Optional)</label>
                     <input
                       placeholder="0321 7654321"
                       value={manualCustomerAltPhone}
                       onChange={(e) => setManualCustomerAltPhone(e.target.value)}
-                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                      style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
                     />
                   </div>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Province</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Province</label>
                     <select
                       value={manualCustomerProvince}
                       onChange={(e) => {
@@ -5811,19 +5819,19 @@ export default function Admin() {
                         const cities = (PAKISTAN_CITIES_BY_PROVINCE as any)[e.target.value] || [];
                         if (cities.length > 0) setManualCustomerCity(cities[0]);
                       }}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
                     >
                       {PAKISTAN_PROVINCES.map((prov) => (
                         <option key={prov} value={prov}>{prov}</option>
                       ))}
                     </select>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Destination City *</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Destination City *</label>
                     <select
                       value={manualCustomerCity}
                       onChange={(e) => setManualCustomerCity(e.target.value)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
                     >
                       {((PAKISTAN_CITIES_BY_PROVINCE as any)[manualCustomerProvince] || ALL_PAKISTAN_CITIES).map((c: string) => (
                         <option key={c} value={c}>{c}</option>
@@ -5834,47 +5842,47 @@ export default function Admin() {
                 </div>
 
                 {manualCustomerCity === "Other" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Custom City Name *</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Custom City Name *</label>
                     <input
                       required
                       placeholder="Enter custom city or tehsil"
                       value={manualCustomerCustomCity}
                       onChange={(e) => setManualCustomerCustomCity(e.target.value)}
-                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                      style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
                     />
                   </div>
                 )}
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Complete Delivery Address *</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Complete Delivery Address *</label>
                   <textarea
                     required
-                    rows={2}
+                    rows={3}
                     placeholder="House / Flat #, Street #, Mohallah / Block, Sector…"
                     value={manualCustomerAddress}
                     onChange={(e) => setManualCustomerAddress(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5, resize: "vertical" }}
+                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, resize: "vertical", lineHeight: 1.5 }}
                   />
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Nearest Landmark (Optional)</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Nearest Landmark (Optional)</label>
                   <input
                     placeholder="e.g. Near Shell Pump / Gourmet Bakery"
                     value={manualCustomerLandmark}
                     onChange={(e) => setManualCustomerLandmark(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
                   />
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Channel / Source</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Order Channel / Source</label>
                     <select
                       value={manualCustomerSource}
                       onChange={(e) => setManualCustomerSource(e.target.value)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
                     >
                       <option value="WhatsApp Order">💬 WhatsApp Order</option>
                       <option value="Phone Call Order">📞 Phone Call Order</option>
@@ -5883,12 +5891,12 @@ export default function Admin() {
                       <option value="Direct Web Entry">🌐 Direct Web Entry</option>
                     </select>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Initial Status</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Initial Status</label>
                     <select
                       value={manualInitialCsrStatus}
                       onChange={(e) => setManualInitialCsrStatus(e.target.value as any)}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
                     >
                       <option value="Confirmed">🟢 CSR Confirmed (Direct to Picklist)</option>
                       <option value="Pending">🟡 Pending Verification Call</option>
@@ -5896,27 +5904,32 @@ export default function Admin() {
                   </div>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Note / Customer Request</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Order Note / Customer Request</label>
                   <input
                     placeholder="e.g. Call before delivery, urgent delivery"
                     value={manualOrderNote}
                     onChange={(e) => setManualOrderNote(e.target.value)}
-                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
                   />
                 </div>
               </div>
 
               {/* Right Column: Product Selection & Pricing */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Package size={15} style={{ color: "#16a34a" }} /> 2. Items &amp; Order Pricing
-                </h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, borderBottom: "1px solid #f1f5f9" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 6, background: "#dcfce7", color: "#16a34a" }}>
+                    <Package size={15} />
+                  </span>
+                  <h4 style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", margin: 0 }}>
+                    2. Items &amp; Order Pricing
+                  </h4>
+                </div>
 
                 {/* Product Picker Box */}
-                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Select Product to Add</label>
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Select Product to Add</label>
                     <select
                       value={manualProductChoice}
                       onChange={(e) => {
@@ -5927,7 +5940,7 @@ export default function Admin() {
                           setManualSizeChoice(sizes[0] || "Standard");
                         }
                       }}
-                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
                     >
                       {products.filter((p) => p.status === "Active").map((p) => (
                         <option key={p.id} value={p.id}>
@@ -5939,12 +5952,12 @@ export default function Admin() {
 
                   {/* Size & Quantity Picker */}
                   <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
-                      <label style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Size / Variant</label>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>Size / Variant</label>
                       <select
                         value={manualSizeChoice}
                         onChange={(e) => setManualSizeChoice(e.target.value)}
-                        style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12 }}
+                        style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
                       >
                         {(() => {
                           const p = products.find((x) => x.id === manualProductChoice);
@@ -5956,22 +5969,22 @@ export default function Admin() {
                       </select>
                     </div>
 
-                    <div style={{ width: 80, display: "flex", flexDirection: "column", gap: 4 }}>
-                      <label style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Qty</label>
+                    <div style={{ width: 85, display: "flex", flexDirection: "column", gap: 5 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>Qty</label>
                       <input
                         type="number"
                         min={1}
                         max={10}
                         value={manualQtyChoice}
                         onChange={(e) => setManualQtyChoice(Math.max(1, parseInt(e.target.value) || 1))}
-                        style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "center" }}
+                        style={{ padding: "9px 8px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 14, fontWeight: 700, textAlign: "center", height: 42, background: "#ffffff" }}
                       />
                     </div>
 
                     <button
                       type="button"
                       className="admin-primary"
-                      style={{ padding: "7px 14px", fontSize: 12, height: 34, background: "#203664" }}
+                      style={{ padding: "0 20px", fontSize: 13.5, fontWeight: 600, height: 42, borderRadius: 8, background: "#203664", display: "flex", alignItems: "center", gap: 6 }}
                       onClick={() => {
                         const p = products.find((x) => x.id === manualProductChoice);
                         if (!p) return;
@@ -6002,34 +6015,34 @@ export default function Admin() {
                         toast.success(`Added ${p.name} (${manualSizeChoice})`);
                       }}
                     >
-                      <Plus size={14} /> Add
+                      <Plus size={15} /> Add
                     </button>
                   </div>
                 </div>
 
                 {/* Added Items List */}
-                <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, minHeight: 120, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, background: "#ffffff" }}>
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, minHeight: 140, maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, background: "#ffffff" }}>
                   {manualOrderItems.length === 0 ? (
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 12, padding: "20px 0" }}>
-                      <ShoppingBag size={24} style={{ marginBottom: 4, opacity: 0.5 }} />
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13, padding: "24px 0" }}>
+                      <ShoppingBag size={28} style={{ marginBottom: 6, opacity: 0.5 }} />
                       <span>No items added yet. Pick a product above and click Add.</span>
                     </div>
                   ) : (
                     manualOrderItems.map((item, idx) => (
-                      <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", background: "#f8fafc", borderRadius: 6, border: "1px solid #f1f5f9" }}>
-                        <img src={item.image} alt={item.name} style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 4, background: "#ffffff" }} />
-                        <div style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
-                          <div style={{ fontWeight: 600, color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
-                          <div style={{ color: "#64748b", fontSize: 11 }}>{item.size} · {item.qty} × {money(item.unitPrice)}</div>
+                      <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #f1f5f9" }}>
+                        <img src={item.image} alt={item.name} style={{ width: 38, height: 38, objectFit: "contain", borderRadius: 6, background: "#ffffff", border: "1px solid #e2e8f0" }} />
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+                          <div style={{ fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                          <div style={{ color: "#64748b", fontSize: 12 }}>{item.size} · {item.qty} × {money(item.unitPrice)}</div>
                         </div>
-                        <div style={{ fontWeight: 700, color: "#0f172a", fontSize: 12 }}>{money(item.totalPrice)}</div>
+                        <div style={{ fontWeight: 700, color: "#0f172a", fontSize: 13.5 }}>{money(item.totalPrice)}</div>
                         <button
                           type="button"
                           onClick={() => setManualOrderItems((prev) => prev.filter((_, i) => i !== idx))}
-                          style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", padding: 2 }}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", padding: 4, borderRadius: 4 }}
                           title="Remove item"
                         >
-                          <X size={14} />
+                          <X size={16} />
                         </button>
                       </div>
                     ))
@@ -6037,7 +6050,7 @@ export default function Admin() {
                 </div>
 
                 {/* Price Breakdown */}
-                <div style={{ background: "#f1f5f9", padding: 12, borderRadius: 8, display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", padding: "14px 16px", borderRadius: 10, display: "flex", flexDirection: "column", gap: 8, fontSize: 13.5 }}>
                   {(() => {
                     const subtotal = manualOrderItems.reduce((acc, item) => acc + item.totalPrice, 0);
                     const delivery = Math.max(0, parseInt(manualCustomDelivery) || 0);
@@ -6047,37 +6060,37 @@ export default function Admin() {
                       <>
                         <div style={{ display: "flex", justifyContent: "space-between", color: "#475569" }}>
                           <span>Items Subtotal:</span>
-                          <b>{money(subtotal)}</b>
+                          <b style={{ color: "#0f172a" }}>{money(subtotal)}</b>
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
                           <span>Delivery Charges:</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <span>Rs.</span>
                             <input
                               type="number"
                               min={0}
                               value={manualCustomDelivery}
                               onChange={(e) => setManualCustomDelivery(e.target.value)}
-                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
+                              style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13.5, textAlign: "right", background: "#ffffff" }}
                             />
                           </div>
                         </div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
                           <span>Discount:</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <span>- Rs.</span>
                             <input
                               type="number"
                               min={0}
                               value={manualCustomDiscount}
                               onChange={(e) => setManualCustomDiscount(e.target.value)}
-                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
+                              style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13.5, textAlign: "right", background: "#ffffff" }}
                             />
                           </div>
                         </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", color: "#0f172a", fontSize: 14, fontWeight: 800, borderTop: "1px solid #cbd5e1", paddingTop: 6, marginTop: 2 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#0f172a", fontSize: 15, fontWeight: 800, borderTop: "1.5px solid #cbd5e1", paddingTop: 10, marginTop: 4 }}>
                           <span>Total COD Amount:</span>
-                          <span style={{ color: "#16a34a" }}>{money(grandTotal)}</span>
+                          <span style={{ color: "#16a34a", fontSize: 18, fontWeight: 800 }}>{money(grandTotal)}</span>
                         </div>
                       </>
                     );
@@ -6087,21 +6100,22 @@ export default function Admin() {
             </div>
 
             {/* Dialog Footer Actions */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "1px solid #e2e8f0", flexWrap: "wrap", gap: 10 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155", cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 24, paddingTop: 18, borderTop: "1px solid #e2e8f0", flexWrap: "wrap", gap: 12 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155", cursor: "pointer" }}>
                 <input
                   type="checkbox"
                   checked={manualOpenWhatsappAfter}
                   onChange={(e) => setManualOpenWhatsappAfter(e.target.checked)}
-                  style={{ width: 16, height: 16, accentColor: "#16a34a" }}
+                  style={{ width: 17, height: 17, accentColor: "#16a34a" }}
                 />
                 <span>Send WhatsApp confirmation message to customer after placing order</span>
               </label>
 
-              <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
+              <div style={{ display: "flex", gap: 12, marginLeft: "auto" }}>
                 <button
                   type="button"
                   className="admin-secondary"
+                  style={{ padding: "10px 20px", fontSize: 13.5, height: 42, borderRadius: 8 }}
                   onClick={() => setManualOrderModalOpen(false)}
                   disabled={busy}
                 >
@@ -6111,7 +6125,7 @@ export default function Admin() {
                   type="submit"
                   className="admin-primary"
                   disabled={busy || manualOrderItems.length === 0}
-                  style={{ background: "#16a34a" }}
+                  style={{ padding: "10px 28px", fontSize: 14, fontWeight: 700, height: 42, borderRadius: 8, background: "#16a34a" }}
                 >
                   {busy ? "Placing Order…" : "Place Manual Order"}
                 </button>

@@ -1339,3 +1339,16 @@
   }
 }
 
+/* Manual Order Dialog & Large Popups */
+.admin-dialog-manual-order {
+  max-width: min(1180px, 96vw) !important;
+  width: 96vw !important;
+  border-radius: 14px !important;
+}
+
+@media (max-width: 860px) {
+  .manual-order-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
