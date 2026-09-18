@@ -681,6 +681,14 @@ button.milestone-step-display:hover .milestone-label,
   background: #fef2f2;
   border-color: #f87171;
 }
+.order-sub-btn.delete {
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+.order-sub-btn.delete:hover {
+  background: #fef2f2;
+  border-color: #ef4444;
+}
 
 /* Tier 1 Main Orders Tabs */
 .orders-main-tabs {
@@ -950,6 +958,13 @@ button.milestone-step-display:hover .milestone-label,
 }
 .bulk-action-btn.shipped:hover {
   background: #0369a1;
+}
+.bulk-action-btn.delete {
+  background: #dc2626;
+  color: #ffffff;
+}
+.bulk-action-btn.delete:hover {
+  background: #b91c1c;
 }
 
 @media(max-width: 1280px) {

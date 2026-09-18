@@ -2414,6 +2414,27 @@ export default function Admin() {
                           <X size={12} /> Cancel
                         </button>
                       )}
+
+                      <button
+                        type="button"
+                        className="order-sub-btn delete"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Are you sure you want to permanently delete order #${o.id.slice(0, 8)}? This will restore inventory stock.`)) {
+                            await write({ action: "delete-order", id: o.id });
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.filter((item) => item.id !== o.id),
+                            } : curr);
+                            setSelectedOrderIds((curr) => curr.filter((id) => id !== o.id));
+                            if (selected?.id === o.id) setSelected(null);
+                            toast.success(`Order #${o.id.slice(0, 8)} deleted successfully`);
+                          }
+                        }}
+                        title="Delete order permanently"
+                      >
+                        <Trash2 size={12} /> Delete
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -3360,6 +3381,29 @@ export default function Admin() {
                             }}
                           >
                             <Truck size={14} /> Mark Shipped ({selectedOrderIds.length})
+                          </button>
+
+                          <button
+                            type="button"
+                            className="bulk-action-btn delete"
+                            disabled={busy}
+                            onClick={async () => {
+                              if (window.confirm(`Are you sure you want to delete ${selectedOrderIds.length} selected orders? This cannot be undone and will restore stock.`)) {
+                                const idsToDelete = [...selectedOrderIds];
+                                await write({ action: "delete-order", id: idsToDelete });
+                                setData((curr) => curr ? {
+                                  ...curr,
+                                  orders: curr.orders.filter((o) => !idsToDelete.includes(o.id))
+                                } : curr);
+                                if (selected && idsToDelete.includes(selected.id)) {
+                                  setSelected(null);
+                                }
+                                toast.success(`${idsToDelete.length} orders deleted`);
+                                setSelectedOrderIds([]);
+                              }
+                            }}
+                          >
+                            <Trash2 size={14} /> Delete Selected ({selectedOrderIds.length})
                           </button>
                         </div>
                       </div>
@@ -5540,8 +5584,8 @@ export default function Admin() {
                 </button>
               </div>
 
-              {selected.status !== "Cancelled" && (
-                <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e2e8f0", textAlign: "center" }}>
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                {selected.status !== "Cancelled" ? (
                   <button
                     type="button"
                     style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
@@ -5553,8 +5597,28 @@ export default function Admin() {
                   >
                     <X size={14} /> Cancel this order
                   </button>
-                </div>
-              )}
+                ) : <div />}
+
+                <button
+                  type="button"
+                  style={{ background: "none", border: "none", color: "#ef4444", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
+                  onClick={async () => {
+                    if (window.confirm(`Are you sure you want to permanently delete order #${selected.id.slice(0, 8)}? This will restore inventory stock.`)) {
+                      const delId = selected.id;
+                      await write({ action: "delete-order", id: delId });
+                      setSelected(null);
+                      setData((curr) => curr ? {
+                        ...curr,
+                        orders: curr.orders.filter((item) => item.id !== delId),
+                      } : curr);
+                      setSelectedOrderIds((curr) => curr.filter((id) => id !== delId));
+                      toast.success(`Order #${delId.slice(0, 8)} deleted successfully`);
+                    }
+                  }}
+                >
+                  <Trash2 size={14} /> Delete order
+                </button>
+              </div>
             </div>
           )}
         </SheetContent>
