@@ -1129,6 +1129,9 @@ export default function Admin() {
     ["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) ||
     (o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status))
   ).length;
+  const packAwbCount = orders.filter((o) =>
+    ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status)
+  ).length;
   const shippingCount = orders.filter((o) =>
     ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) ||
     (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber)
@@ -1213,7 +1216,7 @@ export default function Admin() {
       } else if (orderSubTab === "picklist") {
         matchesTab = o.status === "Picklist";
       } else if (orderSubTab === "packing") {
-        matchesTab = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status) && !o.details.trackingNumber;
+        matchesTab = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status);
       } else if (orderSubTab === "ready_to_ship") {
         matchesTab = (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber) || o.status === "Ready to Ship";
       } else {
@@ -2298,7 +2301,7 @@ export default function Admin() {
                       </button>
                       <button
                         type="button"
-                        className={section === "orders" && orderMainTab === "fulfillment" ? "active" : ""}
+                        className={section === "orders" && orderMainTab === "fulfillment" && orderSubTab !== "packing" ? "active" : ""}
                         onClick={() => {
                           setOrdersOpen(true);
                           navigate("orders");
@@ -2308,6 +2311,19 @@ export default function Admin() {
                       >
                         <span>Fulfillment</span>
                         {fulfillmentCount > 0 && <span className="admin-sub-badge">{fulfillmentCount}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className={section === "orders" && orderMainTab === "fulfillment" && orderSubTab === "packing" ? "active" : ""}
+                        onClick={() => {
+                          setOrdersOpen(true);
+                          navigate("orders");
+                          setOrderMainTab("fulfillment");
+                          setOrderSubTab("packing");
+                        }}
+                      >
+                        <span>Pack &amp; Airway Bill</span>
+                        {packAwbCount > 0 && <span className="admin-sub-badge">{packAwbCount}</span>}
                       </button>
                       <button
                         type="button"
@@ -2732,7 +2748,7 @@ export default function Admin() {
                       {orderMainTab === "fulfillment" && [
                         { id: "confirmed", label: "Confirmed (Ready for Picklist)", count: orders.filter((o) => o.details.csrStatus === "Confirmed" && ["Pending", "Test order received", "New", "Placed"].includes(o.status)).length },
                         { id: "picklist", label: "Picklist", count: orders.filter((o) => o.status === "Picklist").length },
-                        { id: "packing", label: "Packing", count: orders.filter((o) => ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status) && !o.details.trackingNumber).length },
+                        { id: "packing", label: "Pack & Airway Bill", count: orders.filter((o) => ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status)).length },
                         { id: "ready_to_ship", label: "Ready to Ship", count: orders.filter((o) => (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber) || o.status === "Ready to Ship").length },
                       ].map((sub) => (
                         <button
