@@ -1581,6 +1581,46 @@ export default function Admin() {
     );
   }
 
+  function getFinalOrderStatus(o: Order): string {
+    if (o.status === "Cancelled" || o.details?.csrStatus === "Cancelled by Customer") {
+      return "Cancelled";
+    }
+    if (o.status === "Delivered") {
+      return "Delivered";
+    }
+    if (o.status === "Failed Delivery" || o.details?.courierStatus === "Failed Delivery") {
+      return "Failed Delivery";
+    }
+    if (o.status === "RTO" || o.details?.courierStatus === "RTO") {
+      return "RTO";
+    }
+    if (o.status === "Returned" || o.details?.returnStatus === "Returned") {
+      return "Returned";
+    }
+    if (o.status === "Return Requested" || o.details?.returnStatus === "Requested") {
+      return "Return Requested";
+    }
+    if (o.status === "On Hold") {
+      return "On Hold";
+    }
+    if (["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status)) {
+      return o.status;
+    }
+    if (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status)) {
+      return o.status;
+    }
+    if (o.status === "Picklist") {
+      return "Picklist";
+    }
+    if (o.details?.csrStatus === "Confirmed") {
+      return "CSR Confirmed";
+    }
+    if (o.details?.csrStatus && o.details.csrStatus !== "Pending") {
+      return o.details.csrStatus;
+    }
+    return o.status || "Pending";
+  }
+
   function OrderStatusPill({ status }: { status: string }) {
     const norm = (status || "").toLowerCase();
     let bg = "#f1f5f9";
@@ -1589,18 +1629,22 @@ export default function Admin() {
 
     if (norm === "pending" || norm === "test order received" || norm === "placed" || norm === "new") {
       bg = "#fef9c3"; color = "#854d0e"; border = "#fef08a";
+    } else if (norm.includes("csr confirmed") || norm === "confirmed") {
+      bg = "#ecfdf5"; color = "#047857"; border = "#a7f3d0";
     } else if (norm === "picklist") {
       bg = "#eff6ff"; color = "#1d4ed8"; border = "#bfdbfe";
-    } else if (norm.includes("pack") || norm === "processing") {
+    } else if (norm.includes("pack") || norm === "processing" || norm === "ready to ship") {
       bg = "#f5f3ff"; color = "#6d28d9"; border = "#ddd6fe";
     } else if (norm === "shipped" || norm === "dispatched" || norm === "in transit" || norm === "out for delivery") {
       bg = "#ecfeff"; color = "#0e7490"; border = "#a5f3fc";
     } else if (norm === "delivered") {
       bg = "#dcfce7"; color = "#15803d"; border = "#bbf7d0";
-    } else if (norm === "cancelled") {
+    } else if (norm === "cancelled" || norm.includes("cancelled")) {
       bg = "#fee2e2"; color = "#b91c1c"; border = "#fecaca";
     } else if (norm === "on hold" || norm === "failed delivery" || norm === "rto" || norm.includes("return")) {
       bg = "#fff1f2"; color = "#be123c"; border = "#fecdd3";
+    } else if (norm.includes("no answer") || norm.includes("callback")) {
+      bg = "#fff7ed"; color = "#c2410c"; border = "#ffedd5";
     }
 
     return (
@@ -1654,7 +1698,8 @@ export default function Admin() {
           </thead>
           <tbody>
             {rows.map((o) => {
-              const isCancelled = o.status === "Cancelled" || o.details?.csrStatus === "Cancelled by Customer";
+              const finalStatus = getFinalOrderStatus(o);
+              const isCancelled = finalStatus === "Cancelled";
               const createdDate = o.created_at ? new Date(o.created_at) : null;
               const relativeAgo = createdDate ? timeAgo(createdDate) : "Just now";
 
@@ -1693,12 +1738,7 @@ export default function Admin() {
                     </span>
                   </td>
                   <td style={{ textAlign: "right" }}>
-                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                      <OrderStatusPill status={o.status} />
-                      {o.details?.csrStatus && o.details.csrStatus !== "Pending" && (
-                        <CsrBadge status={o.details.csrStatus} time={o.details.csrConfirmedAt} />
-                      )}
-                    </div>
+                    <OrderStatusPill status={finalStatus} />
                   </td>
                 </tr>
               );
