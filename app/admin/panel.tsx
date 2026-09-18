@@ -1136,6 +1136,10 @@ export default function Admin() {
     ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) ||
     (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber)
   ).length;
+  const deliveredCount = orders.filter((o) => o.status === "Delivered").length;
+  const cancelledCount = orders.filter(
+    (o) => o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer"
+  ).length;
   const returnsRtoCount = orders.filter((o) =>
     ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) ||
     o.details.rtoRisk === "high" ||
@@ -1184,6 +1188,8 @@ export default function Admin() {
         matchesTab = (!o.details.csrStatus || o.details.csrStatus === "Pending" || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")) && o.status !== "Cancelled" && o.status !== "Delivered";
       } else if (orderSubTab === "needs_attention") {
         matchesTab = isOrderNeedsAttention(o);
+      } else if (orderSubTab === "cancelled") {
+        matchesTab = o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer";
       } else if (orderSubTab === "today") {
         if (!o.created_at) matchesTab = false;
         else {
@@ -2349,6 +2355,7 @@ export default function Admin() {
                         }}
                       >
                         <span>Delivered</span>
+                        {deliveredCount > 0 && <span className="admin-sub-badge">{deliveredCount}</span>}
                       </button>
                       <button
                         type="button"
@@ -2361,6 +2368,7 @@ export default function Admin() {
                         }}
                       >
                         <span>Cancelled</span>
+                        {cancelledCount > 0 && <span className="admin-sub-badge">{cancelledCount}</span>}
                       </button>
                       <button
                         type="button"
@@ -2655,6 +2663,18 @@ export default function Admin() {
 
                       <button
                         type="button"
+                        className={`order-kpi-pill ${orderMainTab === "issues_returns" && orderSubTab === "cancelled" ? "active" : ""}`}
+                        onClick={() => { setOrderMainTab("issues_returns"); setOrderSubTab("cancelled"); }}
+                        style={{ borderColor: "#fca5a5", background: orderMainTab === "issues_returns" && orderSubTab === "cancelled" ? "#fef2f2" : undefined }}
+                      >
+                        <span>❌ Cancelled:</span>
+                        <span className="order-kpi-count" style={{ color: "#dc2626" }}>
+                          {cancelledCount}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
                         className={`order-kpi-pill ${orderMainTab === "completed" && orderSubTab === "cod_pending" ? "active" : ""}`}
                         onClick={() => { setOrderMainTab("completed"); setOrderSubTab("cod_pending"); }}
                         style={{ marginLeft: "auto", background: orderMainTab === "completed" && orderSubTab === "cod_pending" ? "#f8fafc" : undefined }}
@@ -2685,7 +2705,7 @@ export default function Admin() {
                             onClick={() => {
                               setOrderMainTab(tab.id);
                               const currentSubs: Record<OrderMainTab, string[]> = {
-                                overview: ["all", "csr_confirmation", "needs_attention", "today"],
+                                overview: ["all", "csr_confirmation", "needs_attention", "cancelled", "today"],
                                 new_csr: ["all", "csr_confirmation", "callback", "no_answer", "whatsapp", "confirmed", "cancelled"],
                                 fulfillment: ["confirmed", "picklist", "packing", "ready_to_ship"],
                                 shipping: ["ready_to_ship", "shipped", "in_transit", "out_for_delivery", "failed_delivery"],
@@ -2712,6 +2732,7 @@ export default function Admin() {
                         { id: "all", label: "All Orders", count: orders.length },
                         { id: "csr_confirmation", label: "📞 CSR Confirmation", count: orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending" || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")) && o.status !== "Cancelled" && o.status !== "Delivered").length },
                         { id: "needs_attention", label: "⚠️ Needs Attention", count: orders.filter(isOrderNeedsAttention).length },
+                        { id: "cancelled", label: "❌ Cancelled", count: cancelledCount },
                         { id: "today", label: "📅 Today's Orders", count: orders.filter((o) => o.created_at && new Date(o.created_at).toDateString() === new Date().toDateString()).length },
                       ].map((sub) => (
                         <button
