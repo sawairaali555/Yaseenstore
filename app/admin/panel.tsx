@@ -1693,7 +1693,8 @@ export default function Admin() {
               <th>Time</th>
               <th>Payment</th>
               <th>Price</th>
-              <th style={{ textAlign: "right" }}>Status</th>
+              <th>Status</th>
+              <th style={{ textAlign: "right" }}>Action</th>
             </tr>
           </thead>
           <tbody>
@@ -1737,8 +1738,21 @@ export default function Admin() {
                       {money(o.total)}
                     </span>
                   </td>
-                  <td style={{ textAlign: "right" }}>
+                  <td>
                     <OrderStatusPill status={finalStatus} />
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      className="recent-order-view-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectOrder(o);
+                      }}
+                      title="View full order details"
+                    >
+                      <Eye size={12} /> View Details
+                    </button>
                   </td>
                 </tr>
               );
