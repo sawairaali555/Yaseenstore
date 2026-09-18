@@ -90,7 +90,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster, toast } from "sonner";
-import { categories as defaultCategories, money } from "@/app/catalog";
+import { categories as defaultCategories, money, effectivePrice } from "@/app/catalog";
+import {
+  ALL_PAKISTAN_CITIES,
+  PAKISTAN_PROVINCES,
+  PAKISTAN_CITIES_BY_PROVINCE,
+  cleanPakistanPhone,
+  isValidPakistanPhone,
+} from "@/lib/pakistan-locations";
 import { colors, packOptions } from "@/lib/listing-options";
 import Overview from "./overview";
 import Categories from "./categories";
@@ -632,7 +639,26 @@ export default function Admin() {
     [rtoRiskFilter, setRtoRiskFilter] = useState<"all" | "normal" | "high">("all"),
     [cancelModalOrder, setCancelModalOrder] = useState<Order | null>(null),
     [cancelReason, setCancelReason] = useState("Customer changed mind / duplicate order"),
-    [cancelCustomNote, setCancelCustomNote] = useState("");
+    [cancelCustomNote, setCancelCustomNote] = useState(""),
+    [manualOrderModalOpen, setManualOrderModalOpen] = useState(false),
+    [manualCustomerName, setManualCustomerName] = useState(""),
+    [manualCustomerPhone, setManualCustomerPhone] = useState(""),
+    [manualCustomerAltPhone, setManualCustomerAltPhone] = useState(""),
+    [manualCustomerAddress, setManualCustomerAddress] = useState(""),
+    [manualCustomerCity, setManualCustomerCity] = useState("Lahore"),
+    [manualCustomerCustomCity, setManualCustomerCustomCity] = useState(""),
+    [manualCustomerProvince, setManualCustomerProvince] = useState("Punjab"),
+    [manualCustomerLandmark, setManualCustomerLandmark] = useState(""),
+    [manualCustomerSource, setManualCustomerSource] = useState("WhatsApp Order"),
+    [manualOrderNote, setManualOrderNote] = useState(""),
+    [manualInitialCsrStatus, setManualInitialCsrStatus] = useState<"Confirmed" | "Pending">("Confirmed"),
+    [manualOrderItems, setManualOrderItems] = useState<{ id: string; name: string; sku: string; image: string; color: string; size: string; qty: number; unitPrice: number; totalPrice: number }[]>([]),
+    [manualProductChoice, setManualProductChoice] = useState(""),
+    [manualSizeChoice, setManualSizeChoice] = useState("Standard"),
+    [manualQtyChoice, setManualQtyChoice] = useState(1),
+    [manualCustomDelivery, setManualCustomDelivery] = useState("200"),
+    [manualCustomDiscount, setManualCustomDiscount] = useState("0"),
+    [manualOpenWhatsappAfter, setManualOpenWhatsappAfter] = useState(true);
 
   async function handleCancelOrder(order: Order, reason: string, note?: string) {
     const timestamp = new Date().toISOString();
@@ -830,6 +856,129 @@ export default function Admin() {
       setOrderSubTab("all");
     }
   }, [data?.role]);
+
+  function openManualOrderModal() {
+    setManualCustomerName("");
+    setManualCustomerPhone("");
+    setManualCustomerAltPhone("");
+    setManualCustomerAddress("");
+    setManualCustomerCity("Lahore");
+    setManualCustomerCustomCity("");
+    setManualCustomerProvince("Punjab");
+    setManualCustomerLandmark("");
+    setManualCustomerSource("WhatsApp Order");
+    setManualOrderNote("");
+    setManualInitialCsrStatus("Confirmed");
+    setManualOrderItems([]);
+    const firstProd = products.find((p) => p.status === "Active") || products[0];
+    if (firstProd) {
+      setManualProductChoice(firstProd.id);
+      setManualSizeChoice(sizeOptionsFor(firstProd)[0] || "Standard");
+    }
+    setManualQtyChoice(1);
+    setManualCustomDelivery(String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200));
+    setManualCustomDiscount("0");
+    setManualOpenWhatsappAfter(true);
+    setManualOrderModalOpen(true);
+  }
+
+  async function handleCreateManualOrder(e: React.FormEvent) {
+    e.preventDefault();
+    if (!manualCustomerName.trim()) {
+      toast.error("Please enter the customer name.");
+      return;
+    }
+    const cleanedPhone = cleanPakistanPhone(manualCustomerPhone);
+    if (!isValidPakistanPhone(cleanedPhone)) {
+      toast.error("Please enter a valid Pakistani mobile number (e.g. 0300 1234567).");
+      return;
+    }
+    const finalCity = manualCustomerCity === "Other"
+      ? manualCustomerCustomCity.trim()
+      : manualCustomerCity.trim();
+    if (!finalCity) {
+      toast.error("Please select or enter destination city.");
+      return;
+    }
+    if (!manualCustomerAddress.trim()) {
+      toast.error("Please enter customer street/delivery address.");
+      return;
+    }
+    if (manualOrderItems.length === 0) {
+      toast.error("Please add at least one product item to the order.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const parsedDelivery = Math.max(0, parseInt(manualCustomDelivery) || 0);
+      const parsedDiscount = Math.max(0, parseInt(manualCustomDiscount) || 0);
+      const fullAddress = manualCustomerLandmark.trim()
+        ? `${manualCustomerAddress.trim()} (Near: ${manualCustomerLandmark.trim()})`
+        : manualCustomerAddress.trim();
+
+      const payload = {
+        name: manualCustomerName.trim(),
+        phone: cleanedPhone,
+        alternatePhone: manualCustomerAltPhone.trim() || undefined,
+        city: finalCity,
+        province: manualCustomerProvince || undefined,
+        state: manualCustomerProvince || undefined,
+        address: fullAddress,
+        landmark: manualCustomerLandmark.trim() || undefined,
+        source: manualCustomerSource || "Manual Order",
+        note: manualOrderNote.trim() || undefined,
+        paymentMethod: "cod",
+        csrStatus: manualInitialCsrStatus,
+        csrAgent: data?.name || "Admin",
+        csrConfirmedAt: manualInitialCsrStatus === "Confirmed" ? new Date().toISOString() : undefined,
+        customDelivery: parsedDelivery,
+        customDiscount: parsedDiscount,
+        status: manualInitialCsrStatus === "Confirmed" ? "Picklist" : "Test order received",
+        items: manualOrderItems.map((item) => ({
+          id: item.id,
+          qty: item.qty,
+          size: item.size || "Standard",
+        })),
+      };
+
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const out: any = await res.json();
+      if (!res.ok) throw new Error(out.error || "Unable to place order.");
+
+      const newOrder: Order = {
+        id: out.id,
+        token: out.token,
+        total: out.total,
+        status: out.status,
+        created_at: out.created_at || new Date().toISOString(),
+        details: out.details,
+        items: out.items,
+      };
+
+      setData((current) => current ? {
+        ...current,
+        orders: [newOrder, ...current.orders.filter((o) => o.id !== newOrder.id)],
+      } : current);
+
+      toast.success(`Order ${out.id} placed successfully!`);
+      setManualOrderModalOpen(false);
+
+      if (manualOpenWhatsappAfter) {
+        const msg = getWhatsAppConfirmationMessage(newOrder, "urdu", config?.logoText || "Zeliy Pakistan");
+        openWhatsApp(newOrder.details.phone, msg);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unable to place manual order.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function navigate(s: string, orderFilterStatus?: string) {
     setSection(s);
@@ -2362,6 +2511,17 @@ export default function Admin() {
               >
                 <RefreshCw size={18} />
               </button>
+              {section === "orders" && (
+                <button
+                  className="admin-primary"
+                  onClick={openManualOrderModal}
+                  disabled={!data || busy}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7, background: "#16a34a" }}
+                >
+                  <Plus size={17} />
+                  Place Manual Order
+                </button>
+              )}
               {["overview", "products"].includes(section) && (
                 <button
                   className="admin-primary"
@@ -2702,6 +2862,16 @@ export default function Admin() {
                             </button>
                           )}
                         </div>
+
+                        <button
+                          type="button"
+                          className="admin-primary"
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 12, fontWeight: 700, background: "#16a34a" }}
+                          onClick={openManualOrderModal}
+                          disabled={!data || busy}
+                        >
+                          <Plus size={14} /> Place Manual Order
+                        </button>
 
                         <button
                           type="button"
@@ -5570,6 +5740,384 @@ export default function Admin() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Order Creation Dialog */}
+      <Dialog
+        open={manualOrderModalOpen}
+        onOpenChange={(open) => {
+          if (!open && !busy) setManualOrderModalOpen(false);
+        }}
+      >
+        <DialogContent className="admin-dialog" style={{ maxWidth: 880, maxHeight: "92vh", overflowY: "auto", padding: 24 }}>
+          <DialogHeader>
+            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 18, color: "#1e293b" }}>
+              <ShoppingBag size={20} style={{ color: "#16a34a" }} /> Place Manual Order
+            </DialogTitle>
+            <DialogDescription>
+              Record phone, WhatsApp, Instagram, or counter walk-in orders with real-time stock deduction.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleCreateManualOrder}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 20, marginTop: 14 }}>
+              {/* Left Column: Customer & Delivery Info */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                  <User size={15} style={{ color: "#4f46e5" }} /> 1. Customer &amp; Delivery Details
+                </h4>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Customer Full Name *</label>
+                  <input
+                    required
+                    placeholder="e.g. Muhammad Ali"
+                    value={manualCustomerName}
+                    onChange={(e) => setManualCustomerName(e.target.value)}
+                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Mobile Phone *</label>
+                    <input
+                      required
+                      placeholder="0300 1234567"
+                      value={manualCustomerPhone}
+                      onChange={(e) => setManualCustomerPhone(e.target.value)}
+                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Alt Phone (Optional)</label>
+                    <input
+                      placeholder="0321 7654321"
+                      value={manualCustomerAltPhone}
+                      onChange={(e) => setManualCustomerAltPhone(e.target.value)}
+                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Province</label>
+                    <select
+                      value={manualCustomerProvince}
+                      onChange={(e) => {
+                        setManualCustomerProvince(e.target.value);
+                        const cities = (PAKISTAN_CITIES_BY_PROVINCE as any)[e.target.value] || [];
+                        if (cities.length > 0) setManualCustomerCity(cities[0]);
+                      }}
+                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    >
+                      {PAKISTAN_PROVINCES.map((prov) => (
+                        <option key={prov} value={prov}>{prov}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Destination City *</label>
+                    <select
+                      value={manualCustomerCity}
+                      onChange={(e) => setManualCustomerCity(e.target.value)}
+                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    >
+                      {((PAKISTAN_CITIES_BY_PROVINCE as any)[manualCustomerProvince] || ALL_PAKISTAN_CITIES).map((c: string) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                      <option value="Other">Other City / Area…</option>
+                    </select>
+                  </div>
+                </div>
+
+                {manualCustomerCity === "Other" && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Custom City Name *</label>
+                    <input
+                      required
+                      placeholder="Enter custom city or tehsil"
+                      value={manualCustomerCustomCity}
+                      onChange={(e) => setManualCustomerCustomCity(e.target.value)}
+                      style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13 }}
+                    />
+                  </div>
+                )}
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Complete Delivery Address *</label>
+                  <textarea
+                    required
+                    rows={2}
+                    placeholder="House / Flat #, Street #, Mohallah / Block, Sector…"
+                    value={manualCustomerAddress}
+                    onChange={(e) => setManualCustomerAddress(e.target.value)}
+                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5, resize: "vertical" }}
+                  />
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Nearest Landmark (Optional)</label>
+                  <input
+                    placeholder="e.g. Near Shell Pump / Gourmet Bakery"
+                    value={manualCustomerLandmark}
+                    onChange={(e) => setManualCustomerLandmark(e.target.value)}
+                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Channel / Source</label>
+                    <select
+                      value={manualCustomerSource}
+                      onChange={(e) => setManualCustomerSource(e.target.value)}
+                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    >
+                      <option value="WhatsApp Order">💬 WhatsApp Order</option>
+                      <option value="Phone Call Order">📞 Phone Call Order</option>
+                      <option value="Instagram / FB DM">📸 Instagram / FB DM</option>
+                      <option value="Counter / Walk-in">🏪 Counter / Walk-in</option>
+                      <option value="Direct Web Entry">🌐 Direct Web Entry</option>
+                    </select>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Initial Status</label>
+                    <select
+                      value={manualInitialCsrStatus}
+                      onChange={(e) => setManualInitialCsrStatus(e.target.value as any)}
+                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    >
+                      <option value="Confirmed">🟢 CSR Confirmed (Direct to Picklist)</option>
+                      <option value="Pending">🟡 Pending Verification Call</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Order Note / Customer Request</label>
+                  <input
+                    placeholder="e.g. Call before delivery, urgent delivery"
+                    value={manualOrderNote}
+                    onChange={(e) => setManualOrderNote(e.target.value)}
+                    style={{ padding: "8px 12px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                  />
+                </div>
+              </div>
+
+              {/* Right Column: Product Selection & Pricing */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Package size={15} style={{ color: "#16a34a" }} /> 2. Items &amp; Order Pricing
+                </h4>
+
+                {/* Product Picker Box */}
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <label style={{ fontSize: 11.5, fontWeight: 600, color: "#475569" }}>Select Product to Add</label>
+                    <select
+                      value={manualProductChoice}
+                      onChange={(e) => {
+                        setManualProductChoice(e.target.value);
+                        const p = products.find((x) => x.id === e.target.value);
+                        if (p) {
+                          const sizes = sizeOptionsFor(p);
+                          setManualSizeChoice(sizes[0] || "Standard");
+                        }
+                      }}
+                      style={{ padding: "8px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12.5 }}
+                    >
+                      {products.filter((p) => p.status === "Active").map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} · {money(effectivePrice(p))} (Stock: {p.stock || 0})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Size & Quantity Picker */}
+                  <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4 }}>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Size / Variant</label>
+                      <select
+                        value={manualSizeChoice}
+                        onChange={(e) => setManualSizeChoice(e.target.value)}
+                        style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12 }}
+                      >
+                        {(() => {
+                          const p = products.find((x) => x.id === manualProductChoice);
+                          const sizes = p ? sizeOptionsFor(p) : ["Standard"];
+                          return sizes.map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ));
+                        })()}
+                      </select>
+                    </div>
+
+                    <div style={{ width: 80, display: "flex", flexDirection: "column", gap: 4 }}>
+                      <label style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Qty</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={manualQtyChoice}
+                        onChange={(e) => setManualQtyChoice(Math.max(1, parseInt(e.target.value) || 1))}
+                        style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "center" }}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      className="admin-primary"
+                      style={{ padding: "7px 14px", fontSize: 12, height: 34, background: "#203664" }}
+                      onClick={() => {
+                        const p = products.find((x) => x.id === manualProductChoice);
+                        if (!p) return;
+                        const unitPrice = effectivePrice(p);
+                        const existingIdx = manualOrderItems.findIndex((item) => item.id === p.id && item.size === manualSizeChoice);
+                        if (existingIdx !== -1) {
+                          setManualOrderItems((prev) => prev.map((item, idx) => idx === existingIdx ? {
+                            ...item,
+                            qty: item.qty + manualQtyChoice,
+                            totalPrice: (item.qty + manualQtyChoice) * item.unitPrice,
+                          } : item));
+                        } else {
+                          setManualOrderItems((prev) => [
+                            ...prev,
+                            {
+                              id: p.id,
+                              name: p.name,
+                              sku: p.sku || p.id,
+                              image: photo(p),
+                              color: p.color || "",
+                              size: manualSizeChoice,
+                              qty: manualQtyChoice,
+                              unitPrice,
+                              totalPrice: unitPrice * manualQtyChoice,
+                            }
+                          ]);
+                        }
+                        toast.success(`Added ${p.name} (${manualSizeChoice})`);
+                      }}
+                    >
+                      <Plus size={14} /> Add
+                    </button>
+                  </div>
+                </div>
+
+                {/* Added Items List */}
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, minHeight: 120, maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, background: "#ffffff" }}>
+                  {manualOrderItems.length === 0 ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 12, padding: "20px 0" }}>
+                      <ShoppingBag size={24} style={{ marginBottom: 4, opacity: 0.5 }} />
+                      <span>No items added yet. Pick a product above and click Add.</span>
+                    </div>
+                  ) : (
+                    manualOrderItems.map((item, idx) => (
+                      <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", background: "#f8fafc", borderRadius: 6, border: "1px solid #f1f5f9" }}>
+                        <img src={item.image} alt={item.name} style={{ width: 32, height: 32, objectFit: "contain", borderRadius: 4, background: "#ffffff" }} />
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
+                          <div style={{ fontWeight: 600, color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                          <div style={{ color: "#64748b", fontSize: 11 }}>{item.size} · {item.qty} × {money(item.unitPrice)}</div>
+                        </div>
+                        <div style={{ fontWeight: 700, color: "#0f172a", fontSize: 12 }}>{money(item.totalPrice)}</div>
+                        <button
+                          type="button"
+                          onClick={() => setManualOrderItems((prev) => prev.filter((_, i) => i !== idx))}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", padding: 2 }}
+                          title="Remove item"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Price Breakdown */}
+                <div style={{ background: "#f1f5f9", padding: 12, borderRadius: 8, display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+                  {(() => {
+                    const subtotal = manualOrderItems.reduce((acc, item) => acc + item.totalPrice, 0);
+                    const delivery = Math.max(0, parseInt(manualCustomDelivery) || 0);
+                    const discount = Math.max(0, parseInt(manualCustomDiscount) || 0);
+                    const grandTotal = Math.max(0, subtotal + delivery - discount);
+                    return (
+                      <>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#475569" }}>
+                          <span>Items Subtotal:</span>
+                          <b>{money(subtotal)}</b>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
+                          <span>Delivery Charges:</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span>Rs.</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={manualCustomDelivery}
+                              onChange={(e) => setManualCustomDelivery(e.target.value)}
+                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
+                          <span>Discount:</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <span>- Rs.</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={manualCustomDiscount}
+                              onChange={(e) => setManualCustomDiscount(e.target.value)}
+                              style={{ width: 70, padding: "2px 6px", borderRadius: 4, border: "1px solid #cbd5e1", fontSize: 12, textAlign: "right" }}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#0f172a", fontSize: 14, fontWeight: 800, borderTop: "1px solid #cbd5e1", paddingTop: 6, marginTop: 2 }}>
+                          <span>Total COD Amount:</span>
+                          <span style={{ color: "#16a34a" }}>{money(grandTotal)}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+
+            {/* Dialog Footer Actions */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "1px solid #e2e8f0", flexWrap: "wrap", gap: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#334155", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={manualOpenWhatsappAfter}
+                  onChange={(e) => setManualOpenWhatsappAfter(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: "#16a34a" }}
+                />
+                <span>Send WhatsApp confirmation message to customer after placing order</span>
+              </label>
+
+              <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
+                <button
+                  type="button"
+                  className="admin-secondary"
+                  onClick={() => setManualOrderModalOpen(false)}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="admin-primary"
+                  disabled={busy || manualOrderItems.length === 0}
+                  style={{ background: "#16a34a" }}
+                >
+                  {busy ? "Placing Order…" : "Place Manual Order"}
+                </button>
+              </div>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
 
