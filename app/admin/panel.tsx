@@ -1646,19 +1646,17 @@ export default function Admin() {
             <tr>
               <th>Order ID</th>
               <th>Customer Name</th>
-              <th>Date &amp; Time</th>
+              <th>Time</th>
               <th>Payment</th>
-              <th style={{ textAlign: "right" }}>Price</th>
+              <th>Price</th>
+              <th style={{ textAlign: "right" }}>Status</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((o) => {
               const isCancelled = o.status === "Cancelled" || o.details?.csrStatus === "Cancelled by Customer";
               const createdDate = o.created_at ? new Date(o.created_at) : null;
-              const timeFormatted = createdDate && !isNaN(createdDate.getTime())
-                ? createdDate.toLocaleDateString("en-PK", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-                : "Recent";
-              const relativeAgo = createdDate ? timeAgo(createdDate) : "";
+              const relativeAgo = createdDate ? timeAgo(createdDate) : "Just now";
 
               return (
                 <tr
@@ -1679,26 +1677,28 @@ export default function Admin() {
                     </span>
                   </td>
                   <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ color: "#475569", fontSize: 12.5, whiteSpace: "nowrap" }}>
-                        {timeFormatted}
-                      </span>
-                      {relativeAgo && (
-                        <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", padding: "2px 7px", borderRadius: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
-                          {relativeAgo}
-                        </span>
-                      )}
-                    </div>
+                    <span style={{ display: "inline-flex", alignItems: "center", fontSize: 11.5, background: "#f1f5f9", color: "#475569", padding: "3px 8px", borderRadius: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
+                      <Clock size={11} style={{ marginRight: 4, opacity: 0.7 }} />
+                      {relativeAgo}
+                    </span>
                   </td>
                   <td>
                     <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 8px", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", borderRadius: 6, fontSize: 11.5, fontWeight: 700 }}>
                       COD
                     </span>
                   </td>
-                  <td style={{ textAlign: "right" }}>
-                    <span style={{ fontSize: 14, fontWeight: 800, color: isCancelled ? "#94a3b8" : "#0f172a" }}>
+                  <td>
+                    <span style={{ fontSize: 13.5, fontWeight: 800, color: isCancelled ? "#94a3b8" : "#0f172a" }}>
                       {money(o.total)}
                     </span>
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                      <OrderStatusPill status={o.status} />
+                      {o.details?.csrStatus && o.details.csrStatus !== "Pending" && (
+                        <CsrBadge status={o.details.csrStatus} time={o.details.csrConfirmedAt} />
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
