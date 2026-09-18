@@ -1007,7 +1007,9 @@ export default function Admin() {
     // 1. Two-Tier Tab Filtering
     let matchesTab = true;
     if (orderMainTab === "overview") {
-      if (orderSubTab === "needs_attention") {
+      if (orderSubTab === "csr_confirmation") {
+        matchesTab = (!o.details.csrStatus || o.details.csrStatus === "Pending" || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")) && o.status !== "Cancelled" && o.status !== "Delivered";
+      } else if (orderSubTab === "needs_attention") {
         matchesTab = isOrderNeedsAttention(o);
       } else if (orderSubTab === "today") {
         if (!o.created_at) matchesTab = false;
@@ -1020,7 +1022,7 @@ export default function Admin() {
       }
     } else if (orderMainTab === "new_csr") {
       const cStatus = o.details.csrStatus || "Pending";
-      if (orderSubTab === "pending") {
+      if (orderSubTab === "pending" || orderSubTab === "csr_confirmation") {
         matchesTab = (cStatus === "Pending" || !o.details.csrStatus) && o.status !== "Cancelled";
       } else if (orderSubTab === "callback") {
         matchesTab = cStatus === "Callback Requested";
@@ -2372,8 +2374,8 @@ export default function Admin() {
                           onClick={() => {
                             setOrderMainTab(tab.id);
                             const currentSubs: Record<OrderMainTab, string[]> = {
-                              overview: ["all", "needs_attention", "today"],
-                              new_csr: ["all", "pending", "callback", "no_answer", "whatsapp", "confirmed", "cancelled"],
+                              overview: ["all", "csr_confirmation", "needs_attention", "today"],
+                              new_csr: ["all", "csr_confirmation", "callback", "no_answer", "whatsapp", "confirmed", "cancelled"],
                               fulfillment: ["confirmed", "picklist", "packing", "ready_to_ship"],
                               shipping: ["ready_to_ship", "shipped", "in_transit", "out_for_delivery", "failed_delivery"],
                               completed: ["delivered", "cod_pending", "cod_collected"],
@@ -2395,6 +2397,7 @@ export default function Admin() {
                     <div className="orders-sub-tabs">
                       {orderMainTab === "overview" && [
                         { id: "all", label: "All Orders", count: orders.length },
+                        { id: "csr_confirmation", label: "📞 CSR Confirmation", count: orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending" || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")) && o.status !== "Cancelled" && o.status !== "Delivered").length },
                         { id: "needs_attention", label: "⚠️ Needs Attention", count: orders.filter(isOrderNeedsAttention).length },
                         { id: "today", label: "📅 Today's Orders", count: orders.filter((o) => o.created_at && new Date(o.created_at).toDateString() === new Date().toDateString()).length },
                       ].map((sub) => (
@@ -2410,8 +2413,8 @@ export default function Admin() {
                       ))}
 
                       {orderMainTab === "new_csr" && [
-                        { id: "all", label: "All", count: orders.length },
-                        { id: "pending", label: "🟡 Pending Call", count: orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending") && o.status !== "Cancelled").length },
+                        { id: "all", label: "All Orders", count: orders.length },
+                        { id: "csr_confirmation", label: "📞 CSR Confirmation (Pending)", count: orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending") && o.status !== "Cancelled").length },
                         { id: "callback", label: "🔵 Callback", count: orders.filter((o) => o.details.csrStatus === "Callback Requested").length },
                         { id: "no_answer", label: "🟠 No Answer", count: orders.filter((o) => o.details.csrStatus?.startsWith("No Answer")).length },
                         { id: "whatsapp", label: "🟣 WhatsApp Sent", count: orders.filter((o) => o.details.csrStatus === "WhatsApp Sent").length },
@@ -2500,6 +2503,45 @@ export default function Admin() {
                         </button>
                       ))}
                     </div>
+
+                    {/* CSR Confirmation Section Info Banner */}
+                    {(orderSubTab === "csr_confirmation" || (orderMainTab === "new_csr" && orderSubTab === "pending")) && (
+                      <div style={{
+                        margin: "12px 20px 0",
+                        padding: "12px 18px",
+                        background: "#fffbeb",
+                        border: "1px solid #fef08a",
+                        borderRadius: 8,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        flexWrap: "wrap",
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 22 }}>📞</span>
+                          <div>
+                            <strong style={{ color: "#92400e", fontSize: 13, display: "block" }}>
+                              CSR Order Confirmation & Verification Section
+                            </strong>
+                            <span style={{ color: "#b45309", fontSize: 11.5 }}>
+                              Verify customer details, items, address & COD amount over call/WhatsApp before dispatching to warehouse picklist.
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "4px 10px", borderRadius: 6, border: "1px solid #fde68a" }}>
+                            🟡 Pending Call: <b>{orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending") && o.status !== "Cancelled").length}</b>
+                          </span>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: "#1e40af", background: "#eff6ff", padding: "4px 10px", borderRadius: 6, border: "1px solid #bfdbfe" }}>
+                            🔵 Callback: <b>{orders.filter((o) => o.details.csrStatus === "Callback Requested").length}</b>
+                          </span>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: "#6b21a8", background: "#faf5ff", padding: "4px 10px", borderRadius: 6, border: "1px solid #e9d5ff" }}>
+                            🟣 WhatsApp: <b>{orders.filter((o) => o.details.csrStatus === "WhatsApp Sent").length}</b>
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Universal Search & Collapsible Advanced Filters */}
                     <div className="orders-toolbar-container">
