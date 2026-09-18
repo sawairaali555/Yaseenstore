@@ -47,6 +47,7 @@ import {
   RotateCcw,
   AlertTriangle,
   ChevronDown,
+  Eye,
 } from "lucide-react";
 import {
   Sidebar,
@@ -1561,6 +1562,161 @@ export default function Admin() {
     );
   }
 
+  function OrderStatusPill({ status }: { status: string }) {
+    const norm = (status || "").toLowerCase();
+    let bg = "#f1f5f9";
+    let color = "#475569";
+    let border = "#e2e8f0";
+
+    if (norm === "pending" || norm === "test order received" || norm === "placed" || norm === "new") {
+      bg = "#fef9c3"; color = "#854d0e"; border = "#fef08a";
+    } else if (norm === "picklist") {
+      bg = "#eff6ff"; color = "#1d4ed8"; border = "#bfdbfe";
+    } else if (norm.includes("pack") || norm === "processing") {
+      bg = "#f5f3ff"; color = "#6d28d9"; border = "#ddd6fe";
+    } else if (norm === "shipped" || norm === "dispatched" || norm === "in transit" || norm === "out for delivery") {
+      bg = "#ecfeff"; color = "#0e7490"; border = "#a5f3fc";
+    } else if (norm === "delivered") {
+      bg = "#dcfce7"; color = "#15803d"; border = "#bbf7d0";
+    } else if (norm === "cancelled") {
+      bg = "#fee2e2"; color = "#b91c1c"; border = "#fecaca";
+    } else if (norm === "on hold" || norm === "failed delivery" || norm === "rto" || norm.includes("return")) {
+      bg = "#fff1f2"; color = "#be123c"; border = "#fecdd3";
+    }
+
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: "3px 8px",
+          borderRadius: 6,
+          fontSize: 11,
+          fontWeight: 700,
+          background: bg,
+          color: color,
+          border: `1px solid ${border}`,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {status}
+      </span>
+    );
+  }
+
+  function RecentOrdersTable({
+    rows,
+    onSelectOrder,
+  }: {
+    rows: Order[];
+    onSelectOrder: (o: Order) => void;
+  }) {
+    if (!rows.length) {
+      return (
+        <div style={{ padding: "36px 20px", textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+          <ShoppingBag size={28} style={{ margin: "0 auto 8px", opacity: 0.4 }} />
+          <div>No orders in this period.</div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="recent-orders-compact-table-wrap">
+        <table className="recent-orders-compact-table">
+          <thead>
+            <tr>
+              <th>Order ID</th>
+              <th>Customer</th>
+              <th>Date &amp; Time</th>
+              <th>Items</th>
+              <th>Total Amount</th>
+              <th>Status</th>
+              <th style={{ textAlign: "right" }}>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((o) => {
+              const isCancelled = o.status === "Cancelled" || o.details?.csrStatus === "Cancelled by Customer";
+              const isDelivered = o.status === "Delivered";
+              const createdDate = o.created_at ? new Date(o.created_at) : null;
+              const timeFormatted = createdDate && !isNaN(createdDate.getTime())
+                ? createdDate.toLocaleDateString("en-PK", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                : "Recent";
+
+              return (
+                <tr
+                  key={o.id}
+                  onClick={() => onSelectOrder(o)}
+                  className="recent-order-row"
+                  style={{ cursor: "pointer" }}
+                >
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                      <span style={{ fontWeight: 700, color: "#1e293b", fontSize: 13 }}>
+                        #{o.id}
+                      </span>
+                      {o.details?.source && (
+                        <span className="recent-order-channel-tag">
+                          {o.details.source.replace(" Order", "").replace(" Entry", "")}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <b style={{ color: "#0f172a", fontSize: 13 }}>{o.details?.name || "Customer"}</b>
+                      <small style={{ color: "#64748b", fontSize: 11.5 }}>
+                        {o.details?.phone || ""} {o.details?.city ? `· ${o.details.city}` : ""}
+                      </small>
+                    </div>
+                  </td>
+                  <td>
+                    <span style={{ color: "#475569", fontSize: 12.5, whiteSpace: "nowrap" }}>
+                      {timeFormatted}
+                    </span>
+                  </td>
+                  <td>
+                    <span style={{ color: "#334155", fontSize: 12.5, fontWeight: 600 }}>
+                      {o.items.length} {o.items.length === 1 ? "item" : "items"}
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <strong style={{ color: isCancelled ? "#94a3b8" : isDelivered ? "#15803d" : "#0f172a", fontSize: 13.5 }}>
+                        {money(o.total)}
+                      </strong>
+                      <small style={{ color: "#64748b", fontSize: 10.5 }}>Cash on Delivery</small>
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <OrderStatusPill status={o.status} />
+                      {o.details?.csrStatus && o.details.csrStatus !== "Pending" && (
+                        <CsrBadge status={o.details.csrStatus} time={o.details.csrConfirmedAt} />
+                      )}
+                    </div>
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <button
+                      type="button"
+                      className="recent-order-view-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectOrder(o);
+                      }}
+                    >
+                      <Eye size={13} /> View details
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   function OrderTable({ rows }: { rows: Order[] }) {
     const copyText = (text: string, label: string) => {
       if (!text) return;
@@ -2589,7 +2745,12 @@ export default function Admin() {
                       setIsNew(false);
                       setSaveError("");
                     }}
-                    table={(rows) => <OrderTable rows={rows} />}
+                    table={(rows) => (
+                      <RecentOrdersTable
+                        rows={rows}
+                        onSelectOrder={(o) => setSelected(o)}
+                      />
+                    )}
                   />
                 )}
                 {section === "reviews" && (
