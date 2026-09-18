@@ -1621,6 +1621,56 @@ export default function Admin() {
     return o.status || "Pending";
   }
 
+  function OrderSourceBadge({ source }: { source?: string }) {
+    const s = (source || "Web Store").trim();
+    const lower = s.toLowerCase();
+
+    let bg = "#f1f5f9";
+    let color = "#475569";
+    let border = "#e2e8f0";
+    let icon = "🌐";
+    let label = s;
+
+    if (lower.includes("whatsapp") || lower.includes("wa")) {
+      bg = "#dcfce7"; color = "#15803d"; border = "#bbf7d0"; icon = "💬"; label = "WhatsApp";
+    } else if (lower.includes("instagram") || lower.includes("insta") || lower.includes("ig")) {
+      bg = "#fdf2f8"; color = "#be185d"; border = "#fbcfe8"; icon = "📸"; label = "Instagram";
+    } else if (lower.includes("facebook") || lower.includes("fb")) {
+      bg = "#eff6ff"; color = "#1d4ed8"; border = "#bfdbfe"; icon = "📘"; label = "Facebook";
+    } else if (lower.includes("tiktok") || lower.includes("tt")) {
+      bg = "#f8fafc"; color = "#0f172a"; border = "#cbd5e1"; icon = "🎵"; label = "TikTok";
+    } else if (lower.includes("phone") || lower.includes("call")) {
+      bg = "#fffbeb"; color = "#b45309"; border = "#fde68a"; icon = "📞"; label = "Phone Call";
+    } else if (lower.includes("mobile")) {
+      bg = "#f0fdfa"; color = "#0f766e"; border = "#99f6e4"; icon = "📱"; label = "Mobile";
+    } else if (lower.includes("walk") || lower.includes("counter") || lower.includes("pos")) {
+      bg = "#f3f4f6"; color = "#374151"; border = "#e5e7eb"; icon = "🏪"; label = "Walk-in";
+    } else if (lower.includes("web") || lower.includes("direct") || lower.includes("online") || lower.includes("store")) {
+      bg = "#eef2ff"; color = "#4338ca"; border = "#c7d2fe"; icon = "🌐"; label = "Web";
+    }
+
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "2.5px 7.5px",
+          borderRadius: 6,
+          fontSize: 11,
+          fontWeight: 600,
+          background: bg,
+          color: color,
+          border: `1px solid ${border}`,
+          whiteSpace: "nowrap",
+        }}
+        title={`Order Destination / Channel: ${s}`}
+      >
+        <span>{icon}</span> {label}
+      </span>
+    );
+  }
+
   function OrderStatusPill({ status }: { status: string }) {
     const norm = (status || "").toLowerCase();
     let bg = "#f1f5f9";
@@ -1688,8 +1738,9 @@ export default function Admin() {
         <table className="recent-orders-compact-table">
           <thead>
             <tr>
-              <th>Order ID</th>
+              <th style={{ width: 44, textAlign: "center" }}>#</th>
               <th>Customer Name</th>
+              <th>Destination</th>
               <th>Time</th>
               <th>Payment</th>
               <th>Price</th>
@@ -1698,7 +1749,7 @@ export default function Admin() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((o) => {
+            {rows.map((o, idx) => {
               const finalStatus = getFinalOrderStatus(o);
               const isCancelled = finalStatus === "Cancelled";
               const createdDate = o.created_at ? new Date(o.created_at) : null;
@@ -1710,17 +1761,20 @@ export default function Admin() {
                   onClick={() => onSelectOrder(o)}
                   className="recent-order-row"
                   style={{ cursor: "pointer" }}
-                  title="Click to view full order details"
+                  title={`Order #${o.id} · Click to view full details`}
                 >
-                  <td>
-                    <span style={{ fontWeight: 700, color: "#1e293b", fontSize: 13 }}>
-                      #{o.id}
+                  <td style={{ textAlign: "center" }}>
+                    <span style={{ fontWeight: 700, color: "#64748b", fontSize: 12.5, background: "#f1f5f9", padding: "2px 7px", borderRadius: 6 }}>
+                      {idx + 1}
                     </span>
                   </td>
                   <td>
                     <span style={{ fontWeight: 600, color: "#0f172a", fontSize: 13 }}>
                       {o.details?.name || "Customer"}
                     </span>
+                  </td>
+                  <td>
+                    <OrderSourceBadge source={o.details?.source} />
                   </td>
                   <td>
                     <span style={{ display: "inline-flex", alignItems: "center", fontSize: 11.5, background: "#f1f5f9", color: "#475569", padding: "3px 8px", borderRadius: 12, fontWeight: 600, whiteSpace: "nowrap" }}>

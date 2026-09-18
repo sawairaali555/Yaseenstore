@@ -55,6 +55,22 @@ type Props = {
   add: () => void;
   buy: () => void;
 };
+const detectClientSource = () => {
+  if (typeof window === "undefined") return "Web Store";
+  const params = new URLSearchParams(window.location.search);
+  const utm = params.get("utm_source") || params.get("source") || params.get("ref");
+  if (utm) {
+    const u = utm.toLowerCase();
+    if (u.includes("wa") || u.includes("whatsapp")) return "WhatsApp";
+    if (u.includes("ig") || u.includes("insta")) return "Instagram";
+    if (u.includes("fb") || u.includes("facebook")) return "Facebook";
+    if (u.includes("tiktok") || u.includes("tt")) return "TikTok";
+    return utm;
+  }
+  const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  return isMobile ? "Mobile Web" : "Web Store";
+};
+
 const sampleReviews = [
   { name: "Ayesha K.", rating: 5, text: "Really happy with the quality. It looks just like the photos and arrived neatly packed.", date: "2 weeks ago" },
   { name: "Hamza R.", rating: 4, text: "Good value for the price and delivery was quick. I would buy this again.", date: "1 month ago" },
@@ -356,7 +372,7 @@ export default function ProductDetail({
           {!!p.bundles?.length && <div className="pdp-bundles"><b>Choose your offer</b><div>{p.bundles.map((bundle, index) => { const regular = p.price * bundle.quantity; const saving = regular > bundle.price ? Math.round((1 - bundle.price / regular) * 100) : 0; return <button type="button" className={selectedBundle === index ? "selected" : ""} key={bundle.id} onClick={() => setSelectedBundle(index)}><span><strong>Buy {index + 1} - Save {saving}%</strong> <small>(Pack of {bundle.quantity})</small><em>+ Free Shipping</em></span><span><strong>{money(bundle.price)}</strong><del>{money(regular)}</del></span>{bundle.content && <i>{bundle.content}</i>}{bundle.contentArabic && <i dir="rtl">{bundle.contentArabic}</i>}</button>; })}</div></div>}
           {hasSizeOptions ? null : (
             <>
-              <form className="pdp-order-form" onSubmit={async (event) => { event.preventDefault(); if (!inStock || !selectedInStock) { setOrderMessage("This colour or variant is out of stock."); return; } setOrderBusy(true); setOrderMessage(""); const form = new FormData(event.currentTarget); try { const bundle = p.bundles?.[selectedBundle]; const orderQty = Math.min(bundle?.quantity || qty, stockForSize("Standard")); const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.get("name"), phone: form.get("phone"), city: form.get("city"), address: form.get("address"), items: [{ id: p.id, qty: orderQty, size: "Standard" }] }) }); const data: any = await response.json(); if (!response.ok) throw Error(data.error || "Unable to place order."); setOrderMessage(`Order placed successfully! (${p.color ? `Color: ${p.color}, ` : ''}Qty: ${orderQty}). Ref: ${data.id}`); event.currentTarget.reset(); } catch (error) { setOrderMessage(error instanceof Error ? error.message : "Unable to place order."); } finally { setOrderBusy(false); } }}>
+              <form className="pdp-order-form" onSubmit={async (event) => { event.preventDefault(); if (!inStock || !selectedInStock) { setOrderMessage("This colour or variant is out of stock."); return; } setOrderBusy(true); setOrderMessage(""); const form = new FormData(event.currentTarget); try { const bundle = p.bundles?.[selectedBundle]; const orderQty = Math.min(bundle?.quantity || qty, stockForSize("Standard")); const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.get("name"), phone: form.get("phone"), city: form.get("city"), address: form.get("address"), source: detectClientSource(), items: [{ id: p.id, qty: orderQty, size: "Standard" }] }) }); const data: any = await response.json(); if (!response.ok) throw Error(data.error || "Unable to place order."); setOrderMessage(`Order placed successfully! (${p.color ? `Color: ${p.color}, ` : ''}Qty: ${orderQty}). Ref: ${data.id}`); event.currentTarget.reset(); } catch (error) { setOrderMessage(error instanceof Error ? error.message : "Unable to place order."); } finally { setOrderBusy(false); } }}>
                 <header>
                   <h2>2. Quick Order & Delivery Detail</h2>
                   <p>Fill out the form below to order with your selected options!</p>
@@ -641,6 +657,7 @@ export default function ProductDetail({
                     address: fullAddress,
                     landmark,
                     paymentMethod,
+                    source: detectClientSource(),
                     items: [{ id: p.id, qty: orderQty, size: size || "Standard" }],
                   }),
                 });
