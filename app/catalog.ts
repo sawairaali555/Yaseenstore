@@ -238,15 +238,48 @@ export const products = [
     status: "Active" as const,
   },
 ];
-export type Product = (typeof products)[number] & {
-  subcategory?: string;
+export interface ProductVariant {
+  id: string;
+  color?: string;
+  colorHex?: string;
+  size?: string;
+  options?: Record<string, string>;
+  title?: string;
   sku?: string;
+  barcode?: string;
+  stock: number;
+  price?: number;
+  oldPrice?: number;
+  costPrice?: number;
+  images?: string[];
+  image?: string;
+  status?: "Active" | "Draft" | "Inactive";
+}
+
+export type Product = Omit<(typeof products)[number], "status" | "soldCount" | "tag" | "features"> & {
+  status?: "Active" | "Draft";
+  soldCount?: string;
+  tag?: string;
+  features?: string[];
+  subcategory?: string;
+  childCategory?: string;
+  brand?: string;
+  productType?: string;
+  shortDescription?: string;
+  sku?: string;
+  barcode?: string;
   color?: string;
   option?: string;
   catalogOwner?: string;
   listingGroup?: string;
-  soldCount?: string;
   stock?: number;
+  lowStockAlert?: number;
+  trackInventory?: boolean;
+  allowBackorders?: boolean;
+  hasVariants?: boolean;
+  variantOptions?: { name: string; values: string[] }[];
+  variants?: ProductVariant[];
+  colorGalleries?: Record<string, { mainImage?: string; images: string[] }>;
   sizeStock?: Record<string, number>;
   sizes?: string[];
   images?: string[];
@@ -257,6 +290,19 @@ export type Product = (typeof products)[number] & {
   offerEnd?: string;
   pricingType?: "offer" | "bundle";
   bundles?: { id: string; content: string; contentArabic: string; quantity: number; price: number }[];
+  shipping?: {
+    weight?: string;
+    length?: string;
+    width?: string;
+    height?: string;
+    freeShipping?: boolean;
+  };
+  storefront?: {
+    featured?: boolean;
+    newArrival?: boolean;
+    bestSeller?: boolean;
+    showOnStorefront?: boolean;
+  };
   deal?: {
     title?: string;
     shippingBadge?: string;
@@ -269,8 +315,9 @@ export type Product = (typeof products)[number] & {
     trustGuarantee?: string;
     chips?: string[];
   };
-  status?: "Active" | "Draft";
   costPrice?: number;
+  regularPrice?: number;
+  salePrice?: number;
   seo?: {
     title?: string;
     titleUrdu?: string;
@@ -278,6 +325,7 @@ export type Product = (typeof products)[number] & {
     keywordsUrdu?: string;
     description?: string;
     descriptionUrdu?: string;
+    slug?: string;
     tags?: string;
     tagsUrdu?: string;
   };

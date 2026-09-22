@@ -2,7 +2,7 @@ import {getChatGPTUser,chatGPTSignInPath} from '@/app/chatgpt-auth';
 import Login from './screen';
 import './login.css';
 export const dynamic='force-dynamic';
-export const metadata={title:'Admin login | Zeliy Pakistan',robots:{index:false,follow:false},referrer:'no-referrer' as const};
+export const metadata={title:'Admin login | Cartify Pakistan',robots:{index:false,follow:false},referrer:'no-referrer' as const};
 export default async function Page({searchParams}:{searchParams:Promise<{next?:string;mode?:string}>}){
  const params=await searchParams;
  const next=params.next==='/admin/team'?'/admin/team':'/admin';

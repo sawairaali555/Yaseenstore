@@ -35,6 +35,9 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { Product, activeOffer, effectivePrice, money } from "./catalog";
+import { productImage } from '@/lib/product-image';
+import { saveShoppingData } from '@/lib/shopping-storage';
+import { getSizesForColor, getVariantAvailableStock, isProductPurchasable, getSizeAvailabilityDetails } from '@/lib/inventory-engine';
 import {
   PAKISTAN_PROVINCES,
   PAKISTAN_CITIES_BY_PROVINCE,
@@ -76,14 +79,6 @@ const sampleReviews = [
   { name: "Hamza R.", rating: 4, text: "Good value for the price and delivery was quick. I would buy this again.", date: "1 month ago" },
   { name: "Sana M.", rating: 5, text: "A lovely everyday product. Easy to use and exactly what I was looking for.", date: "2 months ago" },
 ];
-const defaultSizes = (product: Product) => {
-  const text = (product.name + " " + product.category + " " + (product.subcategory || "")).toLowerCase();
-  if (product.sizes?.length) return product.sizes;
-  if (text.includes("shoe") || text.includes("sneaker")) return ["38", "39", "40", "41", "42", "43", "44"];
-  if (text.includes("dress") || text.includes("clothing") || product.category === "Fashion") return ["XS", "S", "M", "L", "XL"];
-  if (text.includes("bag") || product.category === "Accessories") return ["Standard", "Small", "Medium", "Large"];
-  return ["Standard"];
-};
 const countdownParts = (target: Date | null) => {
   if (!target) return null;
   const remaining = Math.max(0, target.getTime() - Date.now());
@@ -111,6 +106,17 @@ const addWorkingDays = (date: Date, days: number) => {
 };
 const formatDeliveryDate = (date: Date) =>
   date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+const renderRichDescription = (value = "") => {
+  const withoutScripts = value
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
+    .replace(/\son\w+=["'][^"']*["']/gi, "");
+
+  return withoutScripts.replace(
+    /\s(href|src)=["'](?!https?:\/\/|\/api\/media\/|\/images\/|data:image\/)[^"']*["']/gi,
+    ""
+  );
+};
 export default function ProductDetail({
   product: p,
   products,
@@ -133,16 +139,17 @@ export default function ProductDetail({
   const [activeTab, setActiveTab] = useState("details");
   const [selectedBundle, setSelectedBundle] = useState(0);
   const [orderBusy, setOrderBusy] = useState(false);
+  const [orderSucceeded, setOrderSucceeded] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
   const [now, setNow] = useState(() => new Date());
   const images = Array.from(new Set([p.image, ...(p.images || [])].filter(Boolean)));
   const [selectedImage, setSelectedImage] = useState(0);
   const imageValue = images[selectedImage] || p.image;
-  const image = /^https?:\/\//.test(imageValue)
-    ? imageValue
-    : "/images/" + imageValue + ".jpg";
+  const image = productImage(imageValue);
   const offer = activeOffer(p, now);
-  const displayPrice = effectivePrice(p, now);
+  const selectedVariant = p.variants?.find(variant => (variant.size || 'Standard') === size &&
+    (!p.color || (variant.color || '').toLowerCase() === p.color.toLowerCase()));
+  const displayPrice = selectedVariant?.price && selectedVariant.price > 0 ? selectedVariant.price : effectivePrice(p, now);
   const cost = displayPrice * qty;
   const countdown = countdownParts(offer?.end || null);
   const reviews = p.reviews?.length ? p.reviews : sampleReviews;
@@ -169,16 +176,17 @@ export default function ProductDetail({
     trustGuarantee: p.deal?.trustGuarantee || "Order guarantee",
     chips: p.deal?.chips?.length ? p.deal.chips : ["Free returns", "Delay credit", "Return if item damaged", "15-day refund support"],
   };
-  const allSizeOptions = defaultSizes(p);
+  const allSizeOptions = getSizesForColor(p, p.color, true);
   const sizeStock = p.sizeStock;
   const hasSizeStock = !!sizeStock && Object.keys(sizeStock).length > 0;
   const configuredSizes = hasSizeStock ? allSizeOptions.filter(s => Object.prototype.hasOwnProperty.call(sizeStock, s)) : allSizeOptions;
   const sizeOptions = configuredSizes.length > 0 ? configuredSizes : allSizeOptions;
   const hasSizeOptions = sizeOptions.length > 1 || (sizeOptions.length === 1 && sizeOptions[0] !== "Standard");
+  const richDescription = renderRichDescription(p.description || "");
 
-  const stockForSize = (selected: string) => hasSizeStock ? Number(sizeStock?.[selected] || 0) : (p.stock !== undefined ? Number(p.stock) : 50);
-  const inStock = (p.status === "Active" || !p.status) && (hasSizeStock ? Object.values(sizeStock).some((value) => Number(value) > 0) : (p.stock !== undefined ? Number(p.stock) > 0 : true));
-  const selectedInStock = inStock && stockForSize(hasSizeOptions ? size : "Standard") > 0;
+  const stockForSize = (selected: string) => p.allowBackorders ? 50 : getVariantAvailableStock(p, null, selected, p.color);
+  const inStock = isProductPurchasable(p);
+  const selectedInStock = getSizeAvailabilityDetails(p, hasSizeOptions ? size : 'Standard', p.color).isPurchasable;
   const availableForSelected = stockForSize(hasSizeOptions ? size : "Standard");
   const quantityLimit = Math.max(0, Math.min(10, availableForSelected));
 
@@ -228,7 +236,7 @@ export default function ProductDetail({
                   onClick={() => setSelectedImage(index)}
                   aria-label={`View product image ${index + 1}`}
                 >
-                  <img style={{ width: "100%", height: "100%", objectFit: "contain" }} src={/^https?:\/\//.test(value) ? value : "/images/" + value + ".jpg"} alt={`${p.name} image ${index + 1}`} />
+                  <img style={{ width: "100%", height: "100%", objectFit: "contain" }} src={productImage(value)} alt={`${p.name} image ${index + 1}`} />
                 </button>
               ))}
             </div>
@@ -286,7 +294,7 @@ export default function ProductDetail({
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   {childColourVariants.map((variant) => {
                     const value = variant.image;
-                    const src = /^https?:\/\//.test(value) ? value : "/images/" + value + ".jpg";
+                    const src = productImage(value);
                     const selected = variant.id === p.id;
                     return (
                       <a
@@ -372,7 +380,7 @@ export default function ProductDetail({
           {!!p.bundles?.length && <div className="pdp-bundles"><b>Choose your offer</b><div>{p.bundles.map((bundle, index) => { const regular = p.price * bundle.quantity; const saving = regular > bundle.price ? Math.round((1 - bundle.price / regular) * 100) : 0; return <button type="button" className={selectedBundle === index ? "selected" : ""} key={bundle.id} onClick={() => setSelectedBundle(index)}><span><strong>Buy {index + 1} - Save {saving}%</strong> <small>(Pack of {bundle.quantity})</small><em>+ Free Shipping</em></span><span><strong>{money(bundle.price)}</strong><del>{money(regular)}</del></span>{bundle.content && <i>{bundle.content}</i>}{bundle.contentArabic && <i dir="rtl">{bundle.contentArabic}</i>}</button>; })}</div></div>}
           {hasSizeOptions ? null : (
             <>
-              <form className="pdp-order-form" onSubmit={async (event) => { event.preventDefault(); if (!inStock || !selectedInStock) { setOrderMessage("This colour or variant is out of stock."); return; } setOrderBusy(true); setOrderMessage(""); const form = new FormData(event.currentTarget); try { const bundle = p.bundles?.[selectedBundle]; const orderQty = Math.min(bundle?.quantity || qty, stockForSize("Standard")); const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.get("name"), phone: form.get("phone"), city: form.get("city"), address: form.get("address"), source: detectClientSource(), items: [{ id: p.id, qty: orderQty, size: "Standard" }] }) }); const data: any = await response.json(); if (!response.ok) throw Error(data.error || "Unable to place order."); setOrderMessage(`Order placed successfully! (${p.color ? `Color: ${p.color}, ` : ''}Qty: ${orderQty}). Ref: ${data.id}`); event.currentTarget.reset(); } catch (error) { setOrderMessage(error instanceof Error ? error.message : "Unable to place order."); } finally { setOrderBusy(false); } }}>
+              <form className="pdp-order-form" onSubmit={async (event) => { event.preventDefault(); if (orderBusy || orderSucceeded) return; const formElement = event.currentTarget; if (!inStock || !selectedInStock) { setOrderMessage("This colour or variant is out of stock."); return; } setOrderBusy(true); setOrderMessage(""); const form = new FormData(formElement); try { const bundle = p.bundles?.[selectedBundle]; const orderQty = Math.min(bundle?.quantity || qty, stockForSize("Standard")); const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.get("name"), phone: form.get("phone"), city: form.get("city"), address: form.get("address"), source: detectClientSource(), items: [{ id: p.id, qty: orderQty, size: "Standard", color: p.color }] }) }); const data: any = await response.json(); if (!response.ok) throw Error(data.error || "Unable to place order."); setOrderMessage(`Order placed successfully! (${p.color ? `Color: ${p.color}, ` : ''}Qty: ${orderQty}). Ref: ${data.id}`); setOrderSucceeded(true); saveShoppingData("cartify-last-order", data); formElement.reset(); } catch (error) { setOrderMessage(error instanceof Error ? error.message : "Unable to place order."); } finally { setOrderBusy(false); } }}>
                 <header>
                   <h2>2. Quick Order & Delivery Detail</h2>
                   <p>Fill out the form below to order with your selected options!</p>
@@ -392,8 +400,8 @@ export default function ProductDetail({
                   </label>
                 </fieldset>
                 {orderMessage && <p className="pdp-order-message" role="status">{orderMessage}</p>}
-                <button className={orderBusy ? "pdp-place-order is-loading" : orderMessage ? "pdp-place-order is-success" : "pdp-place-order"} disabled={!inStock || !selectedInStock || orderBusy || !!orderMessage}>
-                  {!inStock || !selectedInStock ? "Out of stock" : orderBusy ? <><span className="pdp-order-spinner" /> Placing order…</> : orderMessage ? "✓ Order placed" : `Confirm & Place Order (${qty} item${qty > 1 ? 's' : ''})`}
+                <button className={orderBusy ? "pdp-place-order is-loading" : orderSucceeded ? "pdp-place-order is-success" : "pdp-place-order"} disabled={!inStock || !selectedInStock || orderBusy || orderSucceeded}>
+                  {!inStock || !selectedInStock ? "Out of stock" : orderBusy ? <><span className="pdp-order-spinner" /> Placing order…</> : orderSucceeded ? "Order placed" : `Confirm & Place Order (${qty} item${qty > 1 ? 's' : ''})`}
                 </button>
               </form>
               <div className="pdp-options" style={{ display: "flex", flexDirection: "column", gap: 14, background: "#f8fafc", padding: 16, borderRadius: 8, border: "1px solid #e2e8f0" }}>
@@ -509,12 +517,12 @@ export default function ProductDetail({
           <div className="pdp-tabgrid">
             <div>
               <h2>About this product</h2>
-              <p>{p.description}</p>
-              {p.features.length > 0 && (
+              <div className="pdp-rich-description" dangerouslySetInnerHTML={{ __html: richDescription }} />
+              {(p.features?.length ?? 0) > 0 && (
                 <>
                   <h3>Key features</h3>
                   <ul>
-                    {p.features.map((f, i) => (
+                    {p.features!.map((f, i) => (
                       <li key={i}>{f}</li>
                     ))}
                   </ul>
@@ -620,6 +628,7 @@ export default function ProductDetail({
           <form
             onSubmit={async (event) => {
               event.preventDefault();
+              if (orderBusy) return;
               if (!inStock || !selectedInStock) {
                 setOrderMessage("This product is out of stock.");
                 return;
@@ -658,11 +667,12 @@ export default function ProductDetail({
                     landmark,
                     paymentMethod,
                     source: detectClientSource(),
-                    items: [{ id: p.id, qty: orderQty, size: size || "Standard" }],
+                    items: [{ id: p.id, qty: orderQty, size: size || "Standard", color: p.color, variantId: selectedVariant?.id }],
                   }),
                 });
                 const data: any = await response.json();
                 if (!response.ok) throw Error(data.error || "Unable to place order.");
+                saveShoppingData('cartify-last-order', data);
                 setOrderMessage(`Order placed successfully! Reference: ${data.id}`);
                 setTimeout(() => { setCheckoutOpen(false); setOrderMessage(""); }, 2200);
               } catch (error) {

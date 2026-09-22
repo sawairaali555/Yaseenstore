@@ -49,6 +49,12 @@ import {
   ChevronDown,
   Eye,
   MapPin,
+  Layers,
+  MoreVertical,
+  Square,
+  CheckSquare,
+  Minus,
+  EyeOff,
 } from "lucide-react";
 import {
   Sidebar,
@@ -92,7 +98,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster, toast } from "sonner";
-import { categories as defaultCategories, money, effectivePrice } from "@/app/catalog";
+import { categories as defaultCategories, money, effectivePrice, type ProductVariant } from "@/app/catalog";
 import {
   ALL_PAKISTAN_CITIES,
   PAKISTAN_PROVINCES,
@@ -105,8 +111,37 @@ import Overview from "./overview";
 import Categories from "./categories";
 import Reviews from "./reviews";
 import ImageManager from "./image-manager";
+import AddColorModal from "./add-color-modal";
+import InventoryModal from "./inventory-modal";
+import StockHistoryModal from "./stock-history-modal";
+import RemoveColorModal from "./remove-color-modal";
+import ProductEditor from "./products/editor";
 import Logout from "./logout";
+import BannersManager from "./banners";
+import ManualOrderModal from "./manual-order-modal";
+import CustomerHistoryDrawer from "./customer-history-drawer";
+import OrderHistoryDrawer from "./order-history-drawer";
+import CodSettlementModal from "./cod-settlement-modal";
+import DeleteOrderModal, { DeletionReason } from "./delete-order-modal";
+import ReturnsView from "./returns-view";
+import ReturnDetailDrawer from "./return-detail-drawer";
+import CreateReturnModal from "./create-return-modal";
+import type { ReturnRequest, ReturnStatus, InspectionStatus } from "@/lib/return-types";
+import {
+  getNextOrderAction,
+  evaluateOrderNeedsAttention,
+  detectDuplicateOrder,
+  analyzeCustomerHistory,
+  exportOrdersToCSV,
+  getPipelineIndex,
+  getPakistanCourierTrackingUrl,
+  PIPELINE_STAGES,
+  LifecycleOrder,
+  calculateCodBreakdown,
+  isCodSettled,
+} from "@/lib/order-lifecycle";
 import "./seller.css";
+import { getInventoryStatus, InventoryStatus } from "@/lib/inventory-engine";
 import type { CategoryNode } from "@/lib/categories";
 import type { ManagedProduct, Settings } from "@/lib/store-data";
 
@@ -150,12 +185,26 @@ export type Order = {
     source?: string;
     paymentMethod?: string;
     courier?: string;
+    courierStatus?: string;
     trackingNumber?: string;
+    trackingUrl?: string;
     csrStatus?: CsrStatus;
     csrNotes?: string;
     csrConfirmedAt?: string;
     csrAgent?: string;
     csrHistory?: CsrHistoryEntry[];
+    rtoRisk?: "low" | "medium" | "high" | string;
+    returnStatus?: string;
+    paymentStatus?: string;
+    codCollected?: boolean;
+    orderDiscount?: number;
+    discountType?: "fixed" | "percentage";
+    deliveryOverride?: number;
+    subtotal?: number;
+    deliveryCharge?: number;
+    discount?: number;
+    itemsSummary?: string;
+    [key: string]: any;
   };
   items: {
     id: string;
@@ -167,6 +216,8 @@ export type Order = {
     image?: string;
     unitPrice?: number;
     totalPrice?: number;
+    discount?: number;
+    [key: string]: any;
   }[];
 };
 type Data = {
@@ -175,6 +226,7 @@ type Data = {
   permissions: string[];
   products: ManagedProduct[];
   orders: Order[];
+  returns?: ReturnRequest[];
   settings: Settings;
   categories?: CategoryNode[];
 };
@@ -182,12 +234,19 @@ const sections = [
   { id: "overview", label: "Dashboard", icon: LayoutDashboard },
   { id: "orders", label: "Orders", icon: ShoppingBag },
   { id: "products", label: "Products", icon: Package },
-  { id: "categories", label: "Categories", icon: Tags },
   { id: "customers", label: "Customers", icon: Users },
-  { id: "settings", label: "Store settings", icon: SettingsIcon },
+  { id: "settings", label: "Settings", icon: SettingsIcon },
   { id: "reviews", label: "Reviews", icon: CheckCircle2, hidden: true },
 ];
-export type OrderMainTab = "overview" | "new_csr" | "fulfillment" | "shipping" | "completed" | "issues_returns";
+export type SettingsSubTab =
+  | "store_settings"
+  | "store_setup"
+  | "offers"
+  | "coupons"
+  | "info_pages"
+  | "theme_setting"
+  | "categories";
+export type OrderMainTab = "overview" | "new_csr" | "fulfillment" | "shipping" | "completed" | "issues_returns" | "returns";
 export const pipelineSteps = [
   { id: "Pending", label: "Placed", aliases: ["Pending", "Test order received"], icon: Check },
   { id: "Picklist", label: "Picklist", aliases: ["Picklist"], icon: Package },
@@ -313,7 +372,7 @@ export function getOrderExceptions(order: Order, allOrders: Order[]) {
 export function getWhatsAppConfirmationMessage(
   order: Order,
   template: "english" | "urdu" | "reminder" | "address" = "urdu",
-  storeName = "Zeliy Pakistan"
+  storeName = "Cartify Pakistan"
 ) {
   const itemsText = order.items
     .map(
@@ -463,12 +522,21 @@ const imageUrl = (value: string) =>
   /^https?:\/\//.test(value) ? value : "/images/" + value + ".jpg";
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "colour";
 const sizeOptionsFor = (product: ManagedProduct) => {
-  const text = (product.name + " " + product.category + " " + (product.subcategory || "")).toLowerCase();
-  if (product.sizes?.length) return product.sizes;
-  if (text.match(/shoe|sneaker/)) return ["38", "39", "40", "41", "42", "43", "44"];
-  if (product.category === "Fashion" || text.match(/dress|clothing/)) return ["XS", "S", "M", "L", "XL"];
-  if (text.includes("bag") || product.category === "Accessories") return ["Standard", "Small", "Medium", "Large"];
-  return ["Standard"];
+  if ((product as any).variantOptions && Array.isArray((product as any).variantOptions)) {
+    const sizeOpt = (product as any).variantOptions.find((o: any) => o.name.toLowerCase() === "size");
+    if (sizeOpt && Array.isArray(sizeOpt.values) && sizeOpt.values.length > 0) {
+      return sizeOpt.values.filter((s: string) => s && s !== "Standard");
+    }
+  }
+  if (product.sizes?.length) return product.sizes.filter((s) => s && s !== "Standard");
+  if (product.variants?.length) {
+    const fromVars = Array.from(new Set(product.variants.map((v) => v.size).filter(Boolean))) as string[];
+    if (fromVars.length > 0) return fromVars.filter((s) => s && s !== "Standard");
+  }
+  if (product.sizeStock && Object.keys(product.sizeStock).length > 0) {
+    return Object.keys(product.sizeStock).filter((s) => s && s !== "Standard");
+  }
+  return [];
 };
 function Choice({
   value,
@@ -590,8 +658,20 @@ function Badge({ status }: { status: string }) {
 export default function Admin() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [section, setSection] = useState("overview"),
-    [productsOpen, setProductsOpen] = useState(true),
-    [ordersOpen, setOrdersOpen] = useState(true),
+    [expandedSection, setExpandedSection] = useState<string | null>(null),
+    [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>("store_settings"),
+    [newOfferTitle, setNewOfferTitle] = useState(""),
+    [newOfferTagline, setNewOfferTagline] = useState(""),
+    [newOfferType, setNewOfferType] = useState<"percentage" | "fixed" | "bundle">("percentage"),
+    [newOfferValue, setNewOfferValue] = useState("10"),
+    [newOfferMinQty, setNewOfferMinQty] = useState("2"),
+    [newOfferBadge, setNewOfferBadge] = useState("POPULAR"),
+    [newCouponCode, setNewCouponCode] = useState(""),
+    [newCouponType, setNewCouponType] = useState<"percentage" | "fixed">("percentage"),
+    [newCouponValue, setNewCouponValue] = useState("10"),
+    [newCouponMinSpend, setNewCouponMinSpend] = useState("1500"),
+    [newCouponExpiry, setNewCouponExpiry] = useState(""),
+    [selectedInfoPageId, setSelectedInfoPageId] = useState("about"),
     [data, setData] = useState<Data | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
@@ -601,13 +681,24 @@ export default function Admin() {
     [categoryFilter, setCategoryFilter] = useState(""),
     [groupStatusFilter, setGroupStatusFilter] = useState(""),
     [stockFilter, setStockFilter] = useState(""),
+    [editingProductId, setEditingProductId] = useState<string | null>(null),
     [editing, setEditing] = useState<ManagedProduct | null>(null),
     [addColorSource, setAddColorSource] = useState<ManagedProduct | null>(null),
-    [addColorChoice, setAddColorChoice] = useState(""),
-    [addColorImages, setAddColorImages] = useState<string[]>([]),
     [imageEditing, setImageEditing] = useState<ManagedProduct | null>(null),
     [priceEditing, setPriceEditing] = useState<ManagedProduct | null>(null),
     [stockEditing, setStockEditing] = useState<ManagedProduct | null>(null),
+    [stockHighlightColor, setStockHighlightColor] = useState<string | null>(null),
+    [inventoryModalProduct, setInventoryModalProduct] = useState<ManagedProduct | null>(null),
+    [inventoryModalTargetColor, setInventoryModalTargetColor] = useState<string | null>(null),
+    [stockHistoryModalProduct, setStockHistoryModalProduct] = useState<ManagedProduct | null>(null),
+    [stockHistoryVariantSku, setStockHistoryVariantSku] = useState<string | null>(null),
+    [stockHistoryVariantColor, setStockHistoryVariantColor] = useState<string | null>(null),
+    [stockHistoryVariantSize, setStockHistoryVariantSize] = useState<string | null>(null),
+    [removeColorProduct, setRemoveColorProduct] = useState<ManagedProduct | null>(null),
+    [removeColorTarget, setRemoveColorTarget] = useState<any | null>(null),
+    [expandedColorRows, setExpandedColorRows] = useState<Record<string, boolean>>({}),
+    [productVariantFilter, setProductVariantFilter] = useState<Record<string, string>>({}),
+    [activeActionDropdown, setActiveActionDropdown] = useState<string | null>(null),
     [stockValue, setStockValue] = useState(""),
     [stockValues, setStockValues] = useState<Record<string, string>>({}),
     [stockColorChoice, setStockColorChoice] = useState(""),
@@ -680,7 +771,34 @@ export default function Admin() {
     [manualQtyChoice, setManualQtyChoice] = useState(1),
     [manualCustomDelivery, setManualCustomDelivery] = useState("200"),
     [manualCustomDiscount, setManualCustomDiscount] = useState("0"),
-    [manualOpenWhatsappAfter, setManualOpenWhatsappAfter] = useState(true);
+    [manualOpenWhatsappAfter, setManualOpenWhatsappAfter] = useState(true),
+    [customerHistoryPhone, setCustomerHistoryPhone] = useState<string | null>(null),
+    [historyTimelineOrder, setHistoryTimelineOrder] = useState<Order | null>(null),
+    [codSettlementOpen, setCodSettlementOpen] = useState(false),
+    [expandedOrderIds, setExpandedOrderIds] = useState<string[]>([]),
+    [dismissedDuplicateOrderIds, setDismissedDuplicateOrderIds] = useState<string[]>([]),
+    [statusFilter, setStatusFilter] = useState("all"),
+    [deleteModalOrder, setDeleteModalOrder] = useState<Order | null>(null),
+    [selectedReturn, setSelectedReturn] = useState<ReturnRequest | null>(null),
+    [createReturnModalOpen, setCreateReturnModalOpen] = useState(false),
+    [sourceFilter, setSourceFilter] = useState("all");
+
+  useEffect(() => {
+    if (!activeActionDropdown) return;
+
+    const closeMenu = () => setActiveActionDropdown(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+
+    document.addEventListener("click", closeMenu);
+    document.addEventListener("keydown", closeOnEscape);
+
+    return () => {
+      document.removeEventListener("click", closeMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [activeActionDropdown]);
 
   async function handleCancelOrder(order: Order, reason: string, note?: string) {
     const timestamp = new Date().toISOString();
@@ -805,8 +923,17 @@ export default function Admin() {
     }
   }
   useEffect(() => {
-    if (new URLSearchParams(location.search).get("section") === "products")
+    const sec = new URLSearchParams(location.search).get("section");
+    if (sec === "products") {
       setSection("products");
+      setExpandedSection("products");
+    } else if (sec === "orders") {
+      setSection("orders");
+      setExpandedSection("orders");
+    } else if (sec === "settings") {
+      setSection("settings");
+      setExpandedSection("settings");
+    }
     load();
   }, []);
   const categoryOptions = categoryNamesFromTree(data?.categories || []);
@@ -880,130 +1007,37 @@ export default function Admin() {
   }, [data?.role]);
 
   function openManualOrderModal() {
-    setManualCustomerName("");
-    setManualCustomerPhone("");
-    setManualCustomerAltPhone("");
-    setManualCustomerAddress("");
-    setManualCustomerCity("Lahore");
-    setManualCustomerCustomCity("");
-    setManualCustomerProvince("Punjab");
-    setManualCustomerLandmark("");
-    setManualCustomerSource("WhatsApp Order");
-    setManualOrderNote("");
-    setManualInitialCsrStatus("Confirmed");
-    setManualOrderItems([]);
-    const firstProd = products.find((p) => p.status === "Active") || products[0];
-    if (firstProd) {
-      setManualProductChoice(firstProd.id);
-      setManualSizeChoice(sizeOptionsFor(firstProd)[0] || "Standard");
-    }
-    setManualQtyChoice(1);
-    setManualProductSearch("");
-    setManualCustomDelivery(String(config?.deliveryCharge !== undefined ? config.deliveryCharge : 200));
-    setManualCustomDiscount("0");
-    setManualOpenWhatsappAfter(true);
     setManualOrderModalOpen(true);
   }
 
-  async function handleCreateManualOrder(e: React.FormEvent) {
-    e.preventDefault();
-    if (!manualCustomerName.trim()) {
-      toast.error("Please enter the customer name.");
+  function navigate(s: string, optionsOrStatus?: string | { mainTab?: OrderMainTab; subTab?: string; stockFilter?: string; filter?: string; rtoRisk?: "all" | "normal" | "high"; problem?: boolean }) {
+    if (s === "categories") {
+      setSection("settings");
+      setExpandedSection("settings");
+      setSettingsSubTab("categories");
       return;
     }
-    const cleanedPhone = cleanPakistanPhone(manualCustomerPhone);
-    if (!isValidPakistanPhone(cleanedPhone)) {
-      toast.error("Please enter a valid Pakistani mobile number (e.g. 0300 1234567).");
+    if (s === "banners") {
+      setSection("settings");
+      setExpandedSection("settings");
+      setSettingsSubTab("theme_setting");
       return;
     }
-    const finalCity = manualCustomerCity === "Other"
-      ? manualCustomerCustomCity.trim()
-      : manualCustomerCity.trim();
-    if (!finalCity) {
-      toast.error("Please select or enter destination city.");
-      return;
-    }
-    if (!manualCustomerAddress.trim()) {
-      toast.error("Please enter customer street/delivery address.");
-      return;
-    }
-    if (manualOrderItems.length === 0) {
-      toast.error("Please add at least one product item to the order.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const parsedDelivery = Math.max(0, parseInt(manualCustomDelivery) || 0);
-      const parsedDiscount = Math.max(0, parseInt(manualCustomDiscount) || 0);
-      const fullAddress = manualCustomerLandmark.trim()
-        ? `${manualCustomerAddress.trim()} (Near: ${manualCustomerLandmark.trim()})`
-        : manualCustomerAddress.trim();
-
-      const payload = {
-        name: manualCustomerName.trim(),
-        phone: cleanedPhone,
-        alternatePhone: manualCustomerAltPhone.trim() || undefined,
-        city: finalCity,
-        province: manualCustomerProvince || undefined,
-        state: manualCustomerProvince || undefined,
-        address: fullAddress,
-        landmark: manualCustomerLandmark.trim() || undefined,
-        source: manualCustomerSource || "Manual Order",
-        note: manualOrderNote.trim() || undefined,
-        paymentMethod: "cod",
-        csrStatus: manualInitialCsrStatus,
-        csrAgent: data?.name || "Admin",
-        csrConfirmedAt: manualInitialCsrStatus === "Confirmed" ? new Date().toISOString() : undefined,
-        customDelivery: parsedDelivery,
-        customDiscount: parsedDiscount,
-        status: manualInitialCsrStatus === "Confirmed" ? "Picklist" : "Test order received",
-        items: manualOrderItems.map((item) => ({
-          id: item.id,
-          qty: item.qty,
-          size: item.size || "Standard",
-        })),
-      };
-
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const out: any = await res.json();
-      if (!res.ok) throw new Error(out.error || "Unable to place order.");
-
-      const newOrder: Order = {
-        id: out.id,
-        token: out.token,
-        total: out.total,
-        status: out.status,
-        created_at: out.created_at || new Date().toISOString(),
-        details: out.details,
-        items: out.items,
-      };
-
-      setData((current) => current ? {
-        ...current,
-        orders: [newOrder, ...current.orders.filter((o) => o.id !== newOrder.id)],
-      } : current);
-
-      toast.success(`Order ${out.id} placed successfully!`);
-      setManualOrderModalOpen(false);
-
-      if (manualOpenWhatsappAfter) {
-        const msg = getWhatsAppConfirmationMessage(newOrder, "urdu", config?.logoText || "Zeliy Pakistan");
-        openWhatsApp(newOrder.details.phone, msg);
+    if (s === "settings") {
+      setSection("settings");
+      setExpandedSection("settings");
+      if (typeof optionsOrStatus === "string" && ["store_settings", "store_setup", "offers", "coupons", "info_pages", "theme_setting", "categories"].includes(optionsOrStatus)) {
+        setSettingsSubTab(optionsOrStatus as any);
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Unable to place manual order.");
-    } finally {
-      setBusy(false);
+      return;
     }
-  }
-
-  function navigate(s: string, orderFilterStatus?: string) {
+    if (s === "orders") {
+      setExpandedSection("orders");
+    } else if (s === "products" || s === "reviews") {
+      setExpandedSection("products");
+    } else {
+      setExpandedSection(null);
+    }
     setSection(s);
     setQuery("");
     setFilter("All statuses");
@@ -1018,25 +1052,42 @@ export default function Admin() {
     setSaveError("");
     setSettingsSaved(false);
 
-    if (s === "orders") {
-      if (orderFilterStatus === "Pending") {
-        setOrderMainTab("new_csr");
-        setOrderSubTab("pending");
-      } else if (orderFilterStatus === "Picklist") {
-        setOrderMainTab("fulfillment");
-        setOrderSubTab("picklist");
-      } else if (orderFilterStatus === "Pack & AirwayBill" || orderFilterStatus === "Processing") {
-        setOrderMainTab("fulfillment");
-        setOrderSubTab("packing");
-      } else if (orderFilterStatus === "Shipped" || orderFilterStatus === "Dispatched") {
-        setOrderMainTab("shipping");
-        setOrderSubTab("shipped");
-      } else if (orderFilterStatus === "Delivered") {
-        setOrderMainTab("completed");
-        setOrderSubTab("delivered");
-      } else {
-        setOrderMainTab("overview");
-        setOrderSubTab("all");
+    if (typeof optionsOrStatus === "object" && optionsOrStatus !== null) {
+      if (optionsOrStatus.mainTab) setOrderMainTab(optionsOrStatus.mainTab);
+      if (optionsOrStatus.subTab) setOrderSubTab(optionsOrStatus.subTab);
+      if (optionsOrStatus.stockFilter) setStockFilter(optionsOrStatus.stockFilter);
+      if (optionsOrStatus.filter) setFilter(optionsOrStatus.filter);
+      if (optionsOrStatus.rtoRisk) setRtoRiskFilter(optionsOrStatus.rtoRisk);
+    } else if (typeof optionsOrStatus === "string") {
+      const orderFilterStatus = optionsOrStatus;
+      if (s === "orders") {
+        if (orderFilterStatus === "Pending") {
+          setOrderMainTab("new_csr");
+          setOrderSubTab("pending");
+        } else if (orderFilterStatus === "Picklist") {
+          setOrderMainTab("fulfillment");
+          setOrderSubTab("picklist");
+        } else if (orderFilterStatus === "Pack & AirwayBill" || orderFilterStatus === "Processing") {
+          setOrderMainTab("fulfillment");
+          setOrderSubTab("packing");
+        } else if (orderFilterStatus === "Shipped" || orderFilterStatus === "Dispatched") {
+          setOrderMainTab("shipping");
+          setOrderSubTab("shipped");
+        } else if (orderFilterStatus === "Delivered") {
+          setOrderMainTab("completed");
+          setOrderSubTab("delivered");
+        } else if (orderFilterStatus === "Draft") {
+          setFilter("Draft");
+        } else {
+          setOrderMainTab("overview");
+          setOrderSubTab("all");
+        }
+      } else if (s === "products") {
+        if (orderFilterStatus === "Draft" || orderFilterStatus === "Active") {
+          setFilter(orderFilterStatus);
+        } else if (["In stock", "Low stock", "Out of stock"].includes(orderFilterStatus)) {
+          setStockFilter(orderFilterStatus);
+        }
       }
     }
   }
@@ -1062,7 +1113,12 @@ export default function Admin() {
     }
   }
   function newProduct() {
-    location.href = "/admin/products/new";
+    setEditingProductId(null);
+    navigate("new_product");
+  }
+  function editProduct(productId: string) {
+    setEditingProductId(productId);
+    navigate("edit_product");
   }
   async function deleteProducts(ids: string[]) {
     const uniqueIds = Array.from(new Set(ids)).filter(Boolean);
@@ -1122,6 +1178,121 @@ export default function Admin() {
     toast.success(`${product.color || product.name} ${status === "Active" ? "activated" : "deactivated"}`);
     return true;
   }
+
+  async function saveVariantStatus(parent: ManagedProduct, variant: any, status: "Active" | "Draft") {
+    if (busy) return false;
+    if (parent.variants && parent.variants.length > 0) {
+      const vColor = (variant.color || variant.name || "").trim().toLowerCase();
+      const updatedVariants = parent.variants.map((v) =>
+        (v.color || "").trim().toLowerCase() === vColor ? { ...v, status } : v
+      );
+      const totalStock = updatedVariants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
+      const updatedProduct = {
+        ...parent,
+        variants: updatedVariants,
+        hasVariants: updatedVariants.length > 0,
+        stock: totalStock,
+      };
+      if (await write({ action: "product", product: updatedProduct })) {
+        await load();
+        toast.success(`${variant.color || variant.name} ${status === "Active" ? "activated" : "deactivated"}`);
+        return true;
+      }
+      return false;
+    } else {
+      return await saveProductStatus(variant, status);
+    }
+  }
+
+  async function deleteColorVariant(parent: ManagedProduct, variant: any) {
+    if (busy) return;
+    const colorName = variant.color || variant.name;
+    if (!window.confirm(`Delete "${colorName}" variant from ${parent.name}? This cannot be undone.`)) return;
+    if (parent.variants && parent.variants.length > 0) {
+      const vColor = (variant.color || variant.name || "").trim().toLowerCase();
+      const updatedVariants = parent.variants.filter((v) => (v.color || "").trim().toLowerCase() !== vColor);
+      const totalStock = updatedVariants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
+      const updatedProduct = {
+        ...parent,
+        variants: updatedVariants,
+        hasVariants: updatedVariants.length > 0,
+        stock: totalStock,
+      };
+      if (await write({ action: "product", product: updatedProduct })) {
+        await load();
+        toast.success(`Variant ${colorName} deleted`);
+      }
+    } else {
+      await deleteProducts([variant.id]);
+    }
+  }
+
+  async function handleSaveInventory(updatedProduct: ManagedProduct) {
+    if (await write({ action: "product", product: updatedProduct })) {
+      await load();
+      toast.success("Inventory updated successfully");
+      return true;
+    }
+    return false;
+  }
+
+  async function handleDisableColorInstead() {
+    if (!removeColorProduct || !removeColorTarget || busy) return;
+    const ok = await saveVariantStatus(removeColorProduct, removeColorTarget, "Draft");
+    if (ok) {
+      setRemoveColorProduct(null);
+      setRemoveColorTarget(null);
+    }
+  }
+
+  async function handleDeleteColorPermanently() {
+    if (!removeColorProduct || !removeColorTarget || busy) return;
+    const parent = removeColorProduct;
+    const variant = removeColorTarget;
+    const colorName = variant.color || variant.name;
+    if (parent.variants && parent.variants.length > 0) {
+      const vColor = (variant.color || variant.name || "").trim().toLowerCase();
+      const updatedVariants = (parent.variants || []).filter((v: any) => (v.color || "").trim().toLowerCase() !== vColor);
+      const totalStock = updatedVariants.reduce((sum: number, v: any) => sum + Number(v.stock || 0), 0);
+      const updatedProduct = {
+        ...parent,
+        variants: updatedVariants,
+        hasVariants: updatedVariants.length > 0,
+        stock: totalStock,
+      };
+      if (await write({ action: "product", product: updatedProduct })) {
+        await load();
+        toast.success(`Variant ${colorName} permanently removed`);
+        setRemoveColorProduct(null);
+        setRemoveColorTarget(null);
+      }
+    } else {
+      await deleteProducts([variant.id]);
+      setRemoveColorProduct(null);
+      setRemoveColorTarget(null);
+    }
+  }
+
+  async function updateSingleVariantStock(parent: ManagedProduct, variantId: string, newStock: number) {
+    if (busy) return;
+    const safeStock = Math.max(0, Math.round(newStock));
+    if (parent.variants && parent.variants.length > 0) {
+      const updatedVariants = parent.variants.map((v) =>
+        v.id === variantId ? { ...v, stock: safeStock } : v
+      );
+      const totalStock = updatedVariants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
+      const updatedProduct = {
+        ...parent,
+        variants: updatedVariants,
+        stock: totalStock,
+        status: totalStock > 0 ? "Active" : parent.status,
+      };
+      if (await write({ action: "product", product: updatedProduct })) {
+        await load();
+        toast.success("Stock updated");
+      }
+    }
+  }
   const orders = data?.orders || [];
   const products = data?.products || [];
   useEffect(() => {
@@ -1132,7 +1303,7 @@ export default function Admin() {
       const sku = row?.querySelector(".product-group-name small")?.textContent?.replace(/^SKU:\s*/, "").trim();
       const source = products.find((item) => (item.sku || item.id) === sku);
       if (!source) return;
-      setAddColorSource(source); setAddColorChoice("");
+      setAddColorSource(source);
     };
     document.addEventListener("click", addColor);
     return () => document.removeEventListener("click", addColor);
@@ -1167,6 +1338,10 @@ export default function Admin() {
     ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) ||
     o.details.rtoRisk === "high" ||
     o.details.returnStatus === "Requested"
+  ).length;
+  const returnRequests = data?.returns || [];
+  const openReturnsCount = returnRequests.filter(
+    (r) => r.returnStatus === "Requested" || r.returnStatus === "Received" || r.returnStatus === "In Transit"
   ).length;
   const total = orders
     .filter((o) => o.status !== "Cancelled")
@@ -1375,8 +1550,12 @@ export default function Admin() {
     const matchesStatus = filter === "All statuses" || p.status === filter;
     const matchesCategory = !categoryFilter || p.category.toLowerCase() === categoryFilter.toLowerCase();
     const matchesGroupStatus = !groupStatusFilter || p.status.toLowerCase() === groupStatusFilter.toLowerCase();
-    const stockVal = (p as any).stock ?? 0;
-    const matchesStock = !stockFilter || (stockFilter === "In stock" ? stockVal > 0 : stockVal <= 0);
+    const invStatus = getInventoryStatus(p as any);
+    const matchesStock = !stockFilter || (
+      stockFilter === "In stock" ? invStatus === "In Stock" :
+      stockFilter === "Low stock" ? invStatus === "Low Stock" :
+      stockFilter === "Out of stock" ? invStatus === "Out of Stock" : true
+    );
     const q = query.trim().toLowerCase();
     const matchesQuery = !q || (p.name + " " + p.category + " " + (p.sku || "") + " " + (p.color || "")).toLowerCase().includes(q);
     return matchesStatus && matchesCategory && matchesGroupStatus && matchesStock && matchesQuery;
@@ -1386,22 +1565,184 @@ export default function Admin() {
       .filter((item) => (item.listingGroup || item.id) === (product.listingGroup || product.id))
       .filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
   const colorVariantsFor = (product: ManagedProduct) => {
+    if (product.variants && product.variants.length > 0) {
+      const distinctColors = new Map<
+        string,
+        {
+          color: string;
+          colorHex?: string;
+          images: string[];
+          stock: number;
+          sku?: string;
+          status?: string;
+          sizes: string[];
+          sizeStock: Record<string, number>;
+          sizeList: Array<{ size: string; stock: number; status?: string; sku?: string }>;
+        }
+      >();
+      for (const v of product.variants) {
+        if (!v.color || v.color === "Not applicable") continue;
+        const existing = distinctColors.get(v.color);
+        const vSize = v.size && v.size !== "Standard" ? v.size : "";
+        const vStock = Number(v.stock || 0);
+
+        if (!existing) {
+          const sizes = vSize ? [vSize] : [];
+          const sizeStock: Record<string, number> = vSize ? { [vSize]: vStock } : {};
+          const sizeList = vSize ? [{ size: vSize, stock: vStock, status: v.status || "Active", sku: v.sku }] : [];
+          distinctColors.set(v.color, {
+            color: v.color,
+            colorHex: v.colorHex,
+            images: v.images && v.images.length ? v.images : (v.image ? [v.image] : []),
+            stock: vStock,
+            sku: v.sku,
+            status: v.status || "Active",
+            sizes,
+            sizeStock,
+            sizeList,
+          });
+        } else {
+          existing.stock += vStock;
+          if (vSize && !existing.sizes.includes(vSize)) {
+            existing.sizes.push(vSize);
+            existing.sizeStock[vSize] = vStock;
+            existing.sizeList.push({ size: vSize, stock: vStock, status: v.status || "Active", sku: v.sku });
+          } else if (vSize) {
+            existing.sizeStock[vSize] = (existing.sizeStock[vSize] || 0) + vStock;
+          }
+          if ((!existing.images || existing.images.length === 0) && v.images && v.images.length) {
+            existing.images = v.images;
+          }
+        }
+      }
+      if (distinctColors.size > 0) {
+        return Array.from(distinctColors.values()).map((c) => ({
+          ...product,
+          id: `${product.id}-${c.color}`,
+          name: `${product.name} · ${c.color}`,
+          color: c.color,
+          colorHex: c.colorHex,
+          sku: c.sku || `${product.sku || product.id}-${c.color.toUpperCase()}`,
+          image: c.images[0] || product.image,
+          images: c.images,
+          stock: c.stock,
+          status: c.status || product.status,
+          sizes: c.sizes,
+          sizeStock: c.sizeStock,
+          sizeList: c.sizeList,
+        })) as any[];
+      }
+    }
     const group = product.listingGroup || product.id;
     const variants = variantsFor(product);
     const specificColours = variants.filter(
       (item) => item.id !== group && item.color && item.color !== "Not applicable"
     );
-    if (specificColours.length > 0) return specificColours;
-    return variants.filter(
+    const targetList = specificColours.length > 0 ? specificColours : variants.filter(
       (item) => item.id !== group && item.color !== "Not applicable"
     );
+
+    return targetList.map((item) => {
+      const sizes = sizeOptionsFor(item) as string[];
+      const sizeStock: Record<string, number> = item.sizeStock || {};
+      const sizeList = sizes.map((sz: string) => ({
+        size: sz,
+        stock: Number(sizeStock[sz] ?? 0),
+        status: item.status,
+      }));
+      return {
+        ...item,
+        sizes,
+        sizeStock,
+        sizeList,
+      };
+    });
   };
-  const openStockEditor = (product: ManagedProduct) => {
-    const variants = variantsFor(product);
+  const openStockEditor = (product: ManagedProduct, targetColor?: string) => {
     setStockEditing(product);
-    setStockValue(String((product as any).stock ?? 0));
-    setStockValues(Object.fromEntries(variants.flatMap((item) => [[item.id, String((item as any).stock ?? 0)], ...sizeOptionsFor(item).map((size) => [item.id + ":" + size, String(((item as any).sizeStock || {})[size] ?? "")])])));
+    setStockHighlightColor(targetColor || null);
     setStockColorChoice("");
+    setStockValue("");
+
+    const newValues: Record<string, string> = {};
+
+    // Extract only the sizes that were actually configured for THIS product
+    const productSizes: string[] = [];
+    if ((product as any).variantOptions && Array.isArray((product as any).variantOptions)) {
+      const sizeOpt = (product as any).variantOptions.find((o: any) => o.name.toLowerCase() === "size");
+      if (sizeOpt && Array.isArray(sizeOpt.values) && sizeOpt.values.length > 0) {
+        for (const s of sizeOpt.values) {
+          if (s && s !== "Standard" && !productSizes.includes(s)) {
+            productSizes.push(s);
+          }
+        }
+      }
+    }
+    if (productSizes.length === 0 && product.sizes && product.sizes.length > 0) {
+      for (const s of product.sizes) {
+        if (s && s !== "Standard" && !productSizes.includes(s)) {
+          productSizes.push(s);
+        }
+      }
+    }
+    if (productSizes.length === 0 && product.variants && product.variants.length > 0) {
+      for (const v of product.variants) {
+        if (v.size && v.size !== "Standard" && !productSizes.includes(v.size)) {
+          productSizes.push(v.size);
+        }
+      }
+    }
+    if (productSizes.length === 0 && product.sizeStock && Object.keys(product.sizeStock).length > 0) {
+      for (const s of Object.keys(product.sizeStock)) {
+        if (s && s !== "Standard" && !productSizes.includes(s)) {
+          productSizes.push(s);
+        }
+      }
+    }
+
+    if (product.variants && product.variants.length > 0) {
+      const colorMap = new Map<string, { stock: number; sizeStock: Record<string, number> }>();
+      for (const v of product.variants) {
+        if (!v.color || v.color === "Not applicable") continue;
+        const existing = colorMap.get(v.color);
+        if (!existing) {
+          const sizeStock: Record<string, number> = {};
+          if (v.size) sizeStock[v.size] = Number(v.stock || 0);
+          colorMap.set(v.color, {
+            stock: Number(v.stock || 0),
+            sizeStock,
+          });
+        } else {
+          existing.stock += Number(v.stock || 0);
+          if (v.size) existing.sizeStock[v.size] = Number(v.stock || 0);
+        }
+      }
+
+      for (const [cName, info] of colorMap.entries()) {
+        newValues[`color:${cName}`] = String(info.stock);
+        if (productSizes.length > 0) {
+          for (const sz of productSizes) {
+            newValues[`color:${cName}:size:${sz}`] = String(info.sizeStock[sz] ?? 0);
+          }
+        } else {
+          for (const [sz, szStock] of Object.entries(info.sizeStock)) {
+            newValues[`color:${cName}:size:${sz}`] = String(szStock);
+          }
+        }
+      }
+      newValues[product.id] = String(product.stock ?? 0);
+    } else {
+      const variants = variantsFor(product);
+      const effectiveSizes = productSizes.length > 0 ? productSizes : (variants[0] ? sizeOptionsFor(variants[0]) : []);
+      for (const item of variants) {
+        newValues[item.id] = String((item as any).stock ?? 0);
+        for (const size of (effectiveSizes.length > 0 ? effectiveSizes : sizeOptionsFor(item))) {
+          newValues[item.id + ":" + size] = String(((item as any).sizeStock || {})[size] ?? "");
+        }
+      }
+    }
+
+    setStockValues(newValues);
   };
   const productRows = Array.from(
     filteredProducts.reduce((map, product) => {
@@ -1411,6 +1752,13 @@ export default function Admin() {
       return map;
     }, new Map<string, ManagedProduct>()).values(),
   );
+  const productStats = {
+    total: productRows.length,
+    active: productRows.filter((product) => product.status === "Active").length,
+    draft: productRows.filter((product) => product.status === "Draft").length,
+    lowStock: productRows.filter((product) => getInventoryStatus(product as any) === "Low Stock").length,
+    outOfStock: productRows.filter((product) => getInventoryStatus(product as any) === "Out of Stock").length,
+  };
   function BarcodeSVG({ value, height = 40 }: { value: string; height?: number }) {
     const bars: number[] = [];
     bars.push(2, 1, 2, 1);
@@ -1461,7 +1809,7 @@ export default function Admin() {
         {/* Header */}
         <div className="awb-header">
           <div>
-            <h2>{storeConfig?.logoText || "ZELIY PAKISTAN"}</h2>
+            <h2>{storeConfig?.logoText || "CARTIFY PAKISTAN"}</h2>
             <small style={{ fontSize: "10px", color: "#444", display: "block", fontWeight: 600 }}>
               Pakistan E-Commerce COD Express
             </small>
@@ -1516,12 +1864,12 @@ export default function Admin() {
           {/* Shipper (Return Address) */}
           <div className="awb-box">
             <span className="awb-box-title">Return If Undelivered To (Shipper)</span>
-            <b style={{ fontSize: "11.5px", display: "block" }}>Zeliy Pakistan Central Hub</b>
+            <b style={{ fontSize: "11.5px", display: "block" }}>Cartify Pakistan Central Hub</b>
             <div style={{ fontSize: "10px", lineHeight: 1.3, color: "#333", marginTop: "2px" }}>
               Plot 45, Sector 15, Korangi Industrial Area, Karachi, Sindh, Pakistan
             </div>
             <div style={{ fontSize: "10px", fontWeight: 600, marginTop: "3px" }}>
-              Support: +92 300 0000000 | info@zeliy.pk
+              Support: +92 300 0000000 | info@cartify.pk
             </div>
             <div style={{ fontSize: "10px", fontWeight: 600, marginTop: "2px" }}>
               Pieces: <b>{pieces || String(totalItemsCount)}</b> | Weight: <b>{weight} KG</b>
@@ -1809,6 +2157,12 @@ export default function Admin() {
       toast.success(`${label} copied!`);
     };
 
+    const severityStyles: Record<string, { bg: string; color: string; border: string }> = {
+      high: { bg: "#fef2f2", color: "#b91c1c", border: "#fecaca" },
+      medium: { bg: "#fffbeb", color: "#b45309", border: "#fde68a" },
+      low: { bg: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe" },
+    };
+
     return rows.length ? (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "16px 20px" }}>
         {rows.map((o) => {
@@ -1820,20 +2174,17 @@ export default function Admin() {
                 : "/images/" + firstItem.image + ".jpg")
             : prod ? photo(prod) : "/images/placeholder.jpg";
           
-          const currentStepIdx = getStepIndex(o.status);
+          const currentStepIdx = getPipelineIndex(o.status);
           const isCancelled = o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer";
           const isCsrConfirmed = o.details.csrStatus === "Confirmed";
-          const isPlaced = ["Pending", "Test order received", "New", "Placed"].includes(o.status);
-          const isPicklist = o.status === "Picklist";
-          const isPacking = ["Pack & AirwayBill", "Packing", "Processing"].includes(o.status);
-          const isShipped = ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status);
-          const isDelivered = o.status === "Delivered";
-          const isFailedDelivery = o.status === "Failed Delivery" || o.details.courierStatus === "Failed Delivery";
-          const isReturnRequested = o.status === "Return Requested" || o.details.returnStatus === "Requested";
+          const isDelivered = o.status === "Delivered" || o.status === "COD Settled";
 
-          const trackingUrl = getCourierTrackingUrl(o.details.courier, o.details.trackingNumber);
-          const customerHistory = getCustomerHistory(orders, o.details.phone, o.id);
-          const exceptions = getOrderExceptions(o, orders);
+          const trackingUrl = getPakistanCourierTrackingUrl(o.details.courier, o.details.trackingNumber);
+          const custProfile = analyzeCustomerHistory(o.details.phone, orders as LifecycleOrder[], o.id);
+          const isFirstOrder = custProfile.totalOrders <= 1;
+          const exceptions = evaluateOrderNeedsAttention(o as LifecycleOrder, orders as LifecycleOrder[], products);
+          const duplicateCheck = detectDuplicateOrder(o as LifecycleOrder, orders as LifecycleOrder[]);
+          const nextAction = getNextOrderAction(o as LifecycleOrder, data?.role);
 
           const createdDate = o.created_at ? new Date(o.created_at) : null;
           const timeFormatted = createdDate && !isNaN(createdDate.getTime())
@@ -1842,6 +2193,42 @@ export default function Admin() {
 
           return (
             <div className="order-card-container" key={o.id}>
+              {/* Duplicate Order Warning Alert */}
+              {duplicateCheck.isDuplicate && !dismissedDuplicateOrderIds.includes(o.id) && (
+                <div className="order-duplicate-alert">
+                  <div className="order-duplicate-alert-info">
+                    <AlertTriangle size={15} style={{ color: "#d97706", flexShrink: 0 }} />
+                    <span>
+                      <strong>Potential Duplicate Order:</strong> {duplicateCheck.reason}
+                    </span>
+                  </div>
+                  <div className="order-duplicate-alert-actions">
+                    {duplicateCheck.matchedOrder && (
+                      <button
+                        type="button"
+                        className="order-duplicate-btn view"
+                        onClick={() => {
+                          setQuery(duplicateCheck.matchedOrder!.id);
+                        }}
+                        title="Filter dashboard to inspect the matching duplicate order"
+                      >
+                        <Eye size={12} /> View Matched Order
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="order-duplicate-btn dismiss"
+                      onClick={() => {
+                        setDismissedDuplicateOrderIds((prev) => [...prev, o.id]);
+                      }}
+                      title="Dismiss this warning and keep processing this order"
+                    >
+                      <Check size={12} /> Continue / Dismiss
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Card Top Header */}
               <div className="order-card-header">
                 <div className="order-header-left">
@@ -1883,9 +2270,7 @@ export default function Admin() {
                     <Clock size={11} style={{ opacity: 0.7 }} />
                     {timeFormatted}
                   </span>
-                  <span className="order-source-badge">
-                    {o.details.source ? o.details.source.split(",")[0] : "Web Store"}
-                  </span>
+                  <OrderSourceBadge source={o.details.source} />
 
                   {o.details.trackingNumber && (
                     <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -1938,32 +2323,47 @@ export default function Admin() {
                       <span>{o.details.name}</span>
                     </div>
 
-                    {customerHistory.isFirstOrder ? (
-                      <span className="order-customer-history-tag" title="First time customer on store">
-                        1st Order
-                      </span>
-                    ) : (
-                      <span
-                        className={`order-customer-history-tag ${customerHistory.rtoCount > 0 ? "risk" : "loyal"}`}
-                        title={`${customerHistory.count} total orders, ${customerHistory.deliveredCount} delivered, ${customerHistory.rtoCount} RTO/returned`}
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      {isFirstOrder ? (
+                        <span className="order-customer-history-tag" title="First time customer on store">
+                          1st Order
+                        </span>
+                      ) : (
+                        <span
+                          className={`order-customer-history-tag ${custProfile.returnedOrders > 0 ? "risk" : "loyal"}`}
+                          title={`${custProfile.totalOrders} lifetime orders · ${custProfile.deliveredOrders} delivered (${custProfile.deliverySuccessRate}% success rate)${custProfile.returnedOrders > 0 ? ` · ${custProfile.returnedOrders} RTO/returned` : ""}`}
+                        >
+                          {custProfile.totalOrders} Orders · {custProfile.deliveredOrders} Delv{custProfile.returnedOrders > 0 ? ` · ${custProfile.returnedOrders} RTO` : ""}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="order-sub-btn"
+                        style={{ padding: "2px 7px", fontSize: 10.5, height: "auto" }}
+                        onClick={() => setCustomerHistoryPhone(o.details.phone)}
+                        title="View full customer lifetime history, past addresses & past ordered products"
                       >
-                        {customerHistory.count} Orders · {customerHistory.deliveredCount} Delv{customerHistory.rtoCount > 0 ? ` · ${customerHistory.rtoCount} RTO` : ""}
-                      </span>
-                    )}
+                        <Clock size={10} /> History
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Warning Exception Badges */}
+                  {/* Smart Warning Exception Badges */}
                   {exceptions.length > 0 && (
                     <div style={{ display: "flex", gap: 5, flexWrap: "wrap", margin: "2px 0" }}>
-                      {exceptions.map((exc, idx) => (
-                        <span
-                          key={idx}
-                          className="order-exception-pill"
-                          style={{ background: exc.bg, color: exc.color, border: `1px solid ${exc.border}` }}
-                        >
-                          {exc.label}
-                        </span>
-                      ))}
+                      {exceptions.map((exc, idx) => {
+                        const style = severityStyles[exc.severity] || severityStyles.medium;
+                        return (
+                          <span
+                            key={idx}
+                            className="order-exception-pill"
+                            style={{ background: style.bg, color: style.color, border: `1px solid ${style.border}` }}
+                            title={exc.detail}
+                          >
+                            {exc.label}
+                          </span>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -2025,7 +2425,7 @@ export default function Admin() {
                       className="csr-btn"
                       title="Send WhatsApp confirmation message in Urdu"
                       onClick={() => {
-                        const msg = getWhatsAppConfirmationMessage(o, "urdu", config?.logoText || "Zeliy Pakistan");
+                        const msg = getWhatsAppConfirmationMessage(o, "urdu", config?.logoText || "Cartify Pakistan");
                         openWhatsApp(o.details.phone, msg);
                       }}
                     >
@@ -2074,36 +2474,21 @@ export default function Admin() {
                     </div>
                   ) : (
                     <div className="order-milestone-stepper">
-                      {pipelineSteps.map((step, idx) => {
-                        const StepIcon = step.icon;
+                      {PIPELINE_STAGES.map((step, idx) => {
                         const isCurrent = currentStepIdx === idx;
                         const isPassed = currentStepIdx > idx;
                         const isActive = isCurrent || isPassed;
                         return (
-                          <button
-                            type="button"
+                          <div
                             key={step.id}
-                            disabled={busy}
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              if (o.status === step.id) return;
-                              const ok = await write({ action: "order", id: o.id, status: step.id });
-                              if (ok) {
-                                setData((curr) => curr ? {
-                                  ...curr,
-                                  orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: step.id } : item)
-                                } : curr);
-                                toast.success(`Order ${o.id} moved to ${step.label}`);
-                              }
-                            }}
-                            className={`milestone-step-display clickable ${isActive ? "active" : ""} ${isCurrent ? "current" : ""} ${isPassed ? "passed" : ""}`}
-                            title={`Click to update stage to: ${step.label}`}
+                            className={`milestone-step-display ${isActive ? "active" : ""} ${isCurrent ? "current" : ""} ${isPassed ? "passed" : ""}`}
+                            title={`Stage: ${step.label}`}
                           >
                             <div className="milestone-circle">
-                              {isPassed ? <Check size={13} /> : <StepIcon size={12} />}
+                              {isPassed ? <Check size={13} /> : idx + 1}
                             </div>
                             <span className="milestone-label">{step.label}</span>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -2151,9 +2536,21 @@ export default function Admin() {
                       </span>
                       {o.items.length > 1 && (
                         <div style={{ marginTop: 2 }}>
-                          <span className="multi-item-tag" onClick={() => { setSelected(o); setStatus(o.status); }}>
-                            +{o.items.length - 1} more item{o.items.length > 2 ? "s" : ""}
-                          </span>
+                          <button
+                            type="button"
+                            className="multi-item-tag"
+                            onClick={() => {
+                              setExpandedOrderIds((prev) =>
+                                prev.includes(o.id) ? prev.filter((id) => id !== o.id) : [...prev, o.id]
+                              );
+                            }}
+                            style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                            title="Toggle all order items list"
+                          >
+                            {expandedOrderIds.includes(o.id)
+                              ? "▲ Collapse items"
+                              : `+${o.items.length - 1} more item${o.items.length > 2 ? "s" : ""} (expand)`}
+                          </button>
                         </div>
                       )}
                       <div>
@@ -2175,9 +2572,54 @@ export default function Admin() {
                     </div>
                   </div>
 
-                  {/* Smart ONE Primary Action Button */}
+                  {/* Multi-Item Accordion Dropdown */}
+                  {o.items.length > 1 && expandedOrderIds.includes(o.id) && (
+                    <div className="order-multi-items-accordion">
+                      <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ background: "#f8fafc", color: "#64748b", textAlign: "left" }}>
+                            <th style={{ padding: "4px 6px" }}>Item</th>
+                            <th style={{ padding: "4px 6px" }}>SKU/Var</th>
+                            <th style={{ padding: "4px 6px", textAlign: "center" }}>Qty</th>
+                            <th style={{ padding: "4px 6px", textAlign: "right" }}>Price</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {o.items.map((it, idx) => {
+                            const itProd = products.find((p) => p.id === it.id);
+                            const itImg = it.image
+                              ? (it.image.startsWith("http") || it.image.startsWith("/") || it.image.startsWith("data:")
+                                  ? it.image
+                                  : "/images/" + it.image + ".jpg")
+                              : itProd ? photo(itProd) : "/images/placeholder.jpg";
+                            return (
+                              <tr key={idx} style={{ borderTop: "1px solid #f1f5f9" }}>
+                                <td style={{ padding: "4px 6px", display: "flex", alignItems: "center", gap: 6 }}>
+                                  <img src={itImg} alt="" style={{ width: 22, height: 22, objectFit: "cover", borderRadius: 4 }} />
+                                  <span style={{ fontWeight: 600, color: "#1e293b", maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {it.name || itProd?.name || it.id}
+                                  </span>
+                                </td>
+                                <td style={{ padding: "4px 6px", color: "#64748b" }}>
+                                  {it.size || it.color || it.sku || "STD"}
+                                </td>
+                                <td style={{ padding: "4px 6px", textAlign: "center", fontWeight: 700 }}>
+                                  {it.qty}
+                                </td>
+                                <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 600 }}>
+                                  {it.unitPrice ? money(it.qty * it.unitPrice) : money(o.total)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Smart ONE Context-Aware Primary Action Button */}
                   <div className="order-smart-actions">
-                    {isCancelled ? (
+                    {nextAction.actionType === "reactivate" ? (
                       <button
                         type="button"
                         className="order-primary-btn reactivate"
@@ -2192,11 +2634,11 @@ export default function Admin() {
                             toast.success(`Order ${o.id} reactivated to Pending`);
                           }
                         }}
-                        title="Reactivate cancelled order"
+                        title={nextAction.description}
                       >
                         <RotateCcw size={13} /> Reactivate Order
                       </button>
-                    ) : isReturnRequested ? (
+                    ) : nextAction.actionType === "review_return" ? (
                       <button
                         type="button"
                         className="order-primary-btn review-return"
@@ -2205,11 +2647,11 @@ export default function Admin() {
                           setStatus(o.status);
                           setSaveError("");
                         }}
-                        title="Review customer return request and process resolution"
+                        title={nextAction.description}
                       >
                         <RotateCcw size={13} /> Review Return
                       </button>
-                    ) : isFailedDelivery ? (
+                    ) : nextAction.actionType === "resolve_delivery" ? (
                       <button
                         type="button"
                         className="order-primary-btn resolve-delivery"
@@ -2218,21 +2660,21 @@ export default function Admin() {
                           setCourierName(o.details.courier || "Trax Logistics");
                           setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
                         }}
-                        title="Resolve courier delivery issue or re-dispatch package"
+                        title={nextAction.description}
                       >
                         <AlertTriangle size={13} /> Resolve Delivery
                       </button>
-                    ) : !isCsrConfirmed ? (
+                    ) : nextAction.actionType === "confirm_csr" ? (
                       <button
                         type="button"
                         className="order-primary-btn confirm"
                         disabled={busy}
                         onClick={() => updateCsrStatus(o, "Confirmed", "Quick verified on call", true)}
-                        title="Confirm order over phone and automatically move to Picklist"
+                        title={nextAction.description}
                       >
                         <Check size={14} /> Confirm Order
                       </button>
-                    ) : isPlaced ? (
+                    ) : nextAction.actionType === "move_picklist" ? (
                       <button
                         type="button"
                         className="order-primary-btn picklist"
@@ -2247,11 +2689,30 @@ export default function Admin() {
                             toast.success(`Order ${o.id} added to Picklist`);
                           }
                         }}
-                        title="Move order into warehouse picklist"
+                        title={nextAction.description}
                       >
                         <Package size={14} /> Add to Picklist
                       </button>
-                    ) : isPicklist ? (
+                    ) : nextAction.actionType === "start_picking" ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn picklist"
+                        disabled={busy}
+                        onClick={async () => {
+                          const ok = await write({ action: "order", id: o.id, status: "Picking" });
+                          if (ok) {
+                            setData((curr) => curr ? {
+                              ...curr,
+                              orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Picking" } : item)
+                            } : curr);
+                            toast.success(`Order ${o.id} moved to Picking`);
+                          }
+                        }}
+                        title={nextAction.description}
+                      >
+                        <Package size={14} /> Start Picking
+                      </button>
+                    ) : nextAction.actionType === "start_packing" ? (
                       <button
                         type="button"
                         className="order-primary-btn packing"
@@ -2266,61 +2727,94 @@ export default function Admin() {
                             toast.success(`Order ${o.id} moved to Packing`);
                           }
                         }}
-                        title="Move order to packaging and Airway Bill generation"
+                        title={nextAction.description}
                       >
                         <Package size={14} /> Start Packing
                       </button>
-                    ) : isPacking ? (
-                      !o.details.trackingNumber ? (
+                    ) : nextAction.actionType === "generate_awb" ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn airwaybill"
+                        onClick={() => {
+                          setAirwayBillOrders([o]);
+                          setCourierName(o.details.courier || "Trax Logistics");
+                          setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
+                        }}
+                        title={nextAction.description}
+                      >
+                        <Printer size={14} /> Generate Airway Bill
+                      </button>
+                    ) : nextAction.actionType === "mark_ready_to_ship" ? (
+                      <div style={{ display: "flex", gap: 6 }}>
                         <button
                           type="button"
-                          className="order-primary-btn airwaybill"
+                          className="order-primary-btn shipped"
+                          style={{ flex: 1 }}
+                          disabled={busy}
+                          onClick={async () => {
+                            const ok = await write({ action: "order", id: o.id, status: "Ready to Ship" });
+                            if (ok) {
+                              setData((curr) => curr ? {
+                                ...curr,
+                                orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Ready to Ship" } : item)
+                              } : curr);
+                              toast.success(`Order ${o.id} marked as Ready to Ship`);
+                            }
+                          }}
+                          title={nextAction.description}
+                        >
+                          <Package size={14} /> Ready to Ship
+                        </button>
+                        <button
+                          type="button"
+                          className="order-sub-btn"
+                          style={{ padding: "0 10px" }}
                           onClick={() => {
                             setAirwayBillOrders([o]);
                             setCourierName(o.details.courier || "Trax Logistics");
                             setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
                           }}
-                          title="Generate and print official Airway Bill shipping label"
+                          title="Print Airway Bill label"
                         >
-                          <Printer size={14} /> Generate Airway Bill
+                          <Printer size={14} />
                         </button>
-                      ) : (
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button
-                            type="button"
-                            className="order-primary-btn shipped"
-                            style={{ flex: 1 }}
-                            disabled={busy}
-                            onClick={async () => {
-                              const ok = await write({ action: "order", id: o.id, status: "Shipped" });
-                              if (ok) {
-                                setData((curr) => curr ? {
-                                  ...curr,
-                                  orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Shipped" } : item)
-                                } : curr);
-                                toast.success(`Order ${o.id} marked as Shipped`);
-                              }
-                            }}
-                            title="Mark as handed over to courier rider"
-                          >
-                            <Truck size={14} /> Mark Shipped
-                          </button>
-                          <button
-                            type="button"
-                            className="order-sub-btn"
-                            style={{ padding: "0 10px" }}
-                            onClick={() => {
-                              setAirwayBillOrders([o]);
-                              setCourierName(o.details.courier || "Trax Logistics");
-                              setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
-                            }}
-                            title="Print Airway Bill label"
-                          >
-                            <Printer size={14} />
-                          </button>
-                        </div>
-                      )
-                    ) : isShipped ? (
+                      </div>
+                    ) : nextAction.actionType === "mark_shipped" ? (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          type="button"
+                          className="order-primary-btn shipped"
+                          style={{ flex: 1 }}
+                          disabled={busy}
+                          onClick={async () => {
+                            const ok = await write({ action: "order", id: o.id, status: "Shipped" });
+                            if (ok) {
+                              setData((curr) => curr ? {
+                                ...curr,
+                                orders: curr.orders.map((item) => item.id === o.id ? { ...item, status: "Shipped" } : item)
+                              } : curr);
+                              toast.success(`Order ${o.id} marked as Shipped`);
+                            }
+                          }}
+                          title={nextAction.description}
+                        >
+                          <Truck size={14} /> Mark Shipped
+                        </button>
+                        <button
+                          type="button"
+                          className="order-sub-btn"
+                          style={{ padding: "0 10px" }}
+                          onClick={() => {
+                            setAirwayBillOrders([o]);
+                            setCourierName(o.details.courier || "Trax Logistics");
+                            setTrackingNumber(o.details.trackingNumber || `TRX-${o.id.replace("ZPK-", "")}`);
+                          }}
+                          title="Print Airway Bill label"
+                        >
+                          <Printer size={14} />
+                        </button>
+                      </div>
+                    ) : nextAction.actionType === "mark_delivered" ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
                         <button
                           type="button"
@@ -2336,7 +2830,7 @@ export default function Admin() {
                               toast.success(`Order ${o.id} marked as Delivered!`);
                             }
                           }}
-                          title="Confirm parcel delivery & COD cash collection"
+                          title={nextAction.description}
                         >
                           <CheckCircle2 size={14} /> Mark Delivered
                         </button>
@@ -2352,6 +2846,16 @@ export default function Admin() {
                           </a>
                         )}
                       </div>
+                    ) : nextAction.actionType === "settle_cod" ? (
+                      <button
+                        type="button"
+                        className="order-primary-btn delivered"
+                        style={{ background: "#059669", borderColor: "#047857" }}
+                        onClick={() => setCodSettlementOpen(true)}
+                        title={nextAction.description}
+                      >
+                        <Banknote size={14} /> Settle COD Remittance
+                      </button>
                     ) : isDelivered ? (
                       <div className="order-delivered-pill">
                         <CheckCircle2 size={14} /> Delivered & Collected
@@ -2394,10 +2898,10 @@ export default function Admin() {
                       <button
                         type="button"
                         className="order-sub-btn"
-                        onClick={() => setHistoryOrder(o)}
-                        title="View status logs and CSR timeline"
+                        onClick={() => setHistoryTimelineOrder(o)}
+                        title="View chronological status logs and CSR audit timeline"
                       >
-                        <Clock size={12} style={{ color: "#64748b" }} /> History
+                        <Clock size={12} style={{ color: "#64748b" }} /> Timeline
                       </button>
 
                       <button
@@ -2427,27 +2931,6 @@ export default function Admin() {
                           <X size={12} style={{ color: "#dc2626" }} /> Cancel
                         </button>
                       )}
-
-                      <button
-                        type="button"
-                        className="order-sub-btn delete"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (window.confirm(`Are you sure you want to permanently delete order #${o.id.slice(0, 8)}? This will restore inventory stock.`)) {
-                            await write({ action: "delete-order", id: o.id });
-                            setData((curr) => curr ? {
-                              ...curr,
-                              orders: curr.orders.filter((item) => item.id !== o.id),
-                            } : curr);
-                            setSelectedOrderIds((curr) => curr.filter((id) => id !== o.id));
-                            if (selected?.id === o.id) setSelected(null);
-                            toast.success(`Order #${o.id.slice(0, 8)} deleted successfully`);
-                          }
-                        }}
-                        title="Delete order permanently"
-                      >
-                        <Trash2 size={12} style={{ color: "#dc2626" }} /> Delete
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -2479,14 +2962,29 @@ export default function Admin() {
       </div>
     );
   }
-  const heading = sections.find((s) => s.id === section)!.label;
+  const heading =
+    section === "settings"
+      ? settingsSubTab === "store_settings"
+        ? "Store Settings"
+        : settingsSubTab === "store_setup"
+          ? "Store Setup"
+          : settingsSubTab === "offers"
+            ? "Offers & Bundle Deals"
+            : settingsSubTab === "coupons"
+              ? "Coupons & Discount Vouchers"
+              : settingsSubTab === "info_pages"
+                ? "Information Pages"
+                : settingsSubTab === "theme_setting"
+                  ? "Theme Setting · Banner Studio"
+                  : "Category Settings"
+      : sections.find((s) => s.id === section)?.label || "Dashboard";
   return (
     <SidebarProvider className="admin-shell">
       <Toaster richColors />
       <Sidebar className="admin-sidebar">
         <SidebarHeader className="admin-brand">
           <a href="/admin" className="logo">
-            zeliy<span>.</span>
+            cartify<span>.</span>
             <small>STORE ADMIN</small>
           </a>
         </SidebarHeader>
@@ -2496,7 +2994,7 @@ export default function Admin() {
               <Store size={19} />
             </span>
             <div>
-              <b>Zeliy Pakistan</b>
+              <b>Cartify Pakistan</b>
               <small>Pakistan · PKR</small>
             </div>
           </div>
@@ -2513,167 +3011,354 @@ export default function Admin() {
                       ? data.permissions.includes("settings.edit")
                       : data.permissions.includes("orders.manage"))),
               )
-              .map((s) => (
-                <SidebarMenuItem key={s.id}>
-                  <SidebarMenuButton
-                    isActive={section === s.id}
-                    onClick={() => {
-                      if (s.id === "products") {
-                        setProductsOpen((open) => !open);
-                        if (section !== "products" && section !== "reviews") {
-                          navigate("products");
+              .map((s) => {
+                const isSettings = s.id === "settings";
+                const isProducts = s.id === "products";
+                const isOrders = s.id === "orders";
+                const hasSubmenu = isSettings || isProducts || isOrders;
+                const isExpanded = expandedSection === s.id;
+                const isCurrentActive = section === s.id || (isProducts && section === "reviews");
+
+                return (
+                  <SidebarMenuItem key={s.id}>
+                    <SidebarMenuButton
+                      isActive={isCurrentActive}
+                      style={
+                        isSettings && (section === "settings" || isExpanded)
+                          ? {
+                              background: "#f3f2ff",
+                              color: "#614cff",
+                              fontWeight: 700,
+                            }
+                          : undefined
+                      }
+                      onClick={() => {
+                        if (hasSubmenu) {
+                          if (isExpanded) {
+                            // Clicking currently open section collapses it
+                            setExpandedSection(null);
+                          } else {
+                            // Open only this section, closing all other accordion sections
+                            setExpandedSection(s.id);
+                            if (section !== s.id && !(isProducts && section === "reviews")) {
+                              navigate(s.id);
+                            }
+                          }
+                        } else {
+                          // Standalone section (Overview, Customers, etc.): close any open accordion
+                          setExpandedSection(null);
+                          navigate(s.id);
                         }
-                      } else if (s.id === "orders") {
-                        setOrdersOpen((open) => !open);
-                        if (section !== "orders") {
-                          navigate("orders");
+                      }}
+                    >
+                      <s.icon
+                        size={18}
+                        style={
+                          isSettings && (section === "settings" || isExpanded)
+                            ? { color: "#614cff" }
+                            : undefined
                         }
-                      } else navigate(s.id);
-                    }}
-                  >
-                    <s.icon size={18} />
-                    <span>{s.label}</span>
-                    {s.id === "products" && (
-                      <ChevronUp
-                        className="admin-submenu-chevron"
-                        size={14}
-                        style={{ transform: productsOpen ? "rotate(0deg)" : "rotate(180deg)" }}
                       />
-                    )}
-                    {s.id === "orders" && (
-                      <>
-                        {orders.length > 0 && (
-                          <b className="admin-count" style={{ marginLeft: "auto", marginRight: 4 }}>{orders.length}</b>
-                        )}
-                        <ChevronUp
-                          className="admin-submenu-chevron"
+                      <span
+                        style={
+                          isSettings && (section === "settings" || isExpanded)
+                            ? { color: "#614cff", fontWeight: 700 }
+                            : undefined
+                        }
+                      >
+                        {s.label}
+                      </span>
+                      {isProducts && (
+                        <ChevronDown
+                          className={`admin-submenu-chevron ${isExpanded ? "expanded" : ""}`}
+                          size={14}
+                        />
+                      )}
+                      {isOrders && (
+                        <>
+                          {orders.length > 0 && (
+                            <b className="admin-count" style={{ marginLeft: "auto", marginRight: 4 }}>
+                              {orders.length}
+                            </b>
+                          )}
+                          <ChevronDown
+                            className={`admin-submenu-chevron ${isExpanded ? "expanded" : ""}`}
+                            size={14}
+                            style={{
+                              marginLeft: orders.length > 0 ? 0 : "auto",
+                            }}
+                          />
+                        </>
+                      )}
+                      {isSettings && (
+                        <ChevronDown
+                          className={`admin-submenu-chevron ${isExpanded ? "expanded" : ""}`}
                           size={14}
                           style={{
-                            marginLeft: orders.length > 0 ? 0 : "auto",
-                            transform: ordersOpen ? "rotate(0deg)" : "rotate(180deg)",
+                            marginLeft: "auto",
+                            color: section === "settings" || isExpanded ? "#614cff" : undefined,
                           }}
                         />
-                      </>
+                      )}
+                    </SidebarMenuButton>
+
+                    {isProducts && (
+                      <div className={`admin-accordion-collapse ${isExpanded ? "expanded" : ""}`}>
+                        <div className="admin-accordion-inner">
+                          <div className="admin-product-submenu">
+                            <button
+                              type="button"
+                              className={section === "products" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("products");
+                                navigate("products");
+                              }}
+                            >
+                              <span>My Products</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "new_product" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("products");
+                                newProduct();
+                              }}
+                            >
+                              <span>Add My Product</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExpandedSection("products");
+                                navigate("products");
+                              }}
+                            >
+                              <span>Dropship catalog</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "reviews" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("products");
+                                navigate("reviews");
+                              }}
+                            >
+                              <span>Reviews</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExpandedSection("products");
+                                navigate("products");
+                              }}
+                            >
+                              <span>Brands</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     )}
-                  </SidebarMenuButton>
-                  {s.id === "products" && productsOpen && (
-                    <div className="admin-product-submenu">
-                      <a href="/admin/products/new">Add My Product</a>
-                      <button type="button" onClick={() => navigate("products")}>Dropship catalog</button>
-                      <button type="button" onClick={() => { setProductsOpen(true); navigate("products"); }}>My Products</button>
-                      <button type="button" onClick={() => { setProductsOpen(true); navigate("reviews"); }}>Reviews</button>
-                      <button type="button" onClick={() => { setProductsOpen(true); navigate("products"); }}>Brands</button>
-                    </div>
-                  )}
-                  {s.id === "orders" && ordersOpen && (
-                    <div className="admin-product-submenu">
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "overview" && orderSubTab === "all" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("overview");
-                          setOrderSubTab("all");
-                        }}
-                      >
-                        <span>All Orders</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "new_csr" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("new_csr");
-                          setOrderSubTab("csr_confirmation");
-                        }}
-                      >
-                        <span>New &amp; CSR</span>
-                        {newCsrCount > 0 && <span className="admin-sub-badge">{newCsrCount}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "fulfillment" && orderSubTab !== "packing" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("fulfillment");
-                          setOrderSubTab("confirmed");
-                        }}
-                      >
-                        <span>Fulfillment</span>
-                        {fulfillmentCount > 0 && <span className="admin-sub-badge">{fulfillmentCount}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "fulfillment" && orderSubTab === "packing" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("fulfillment");
-                          setOrderSubTab("packing");
-                        }}
-                      >
-                        <span>Pack &amp; Airway Bill</span>
-                        {packAwbCount > 0 && <span className="admin-sub-badge">{packAwbCount}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "shipping" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("shipping");
-                          setOrderSubTab("ready_to_ship");
-                        }}
-                      >
-                        <span>Shipping</span>
-                        {shippingCount > 0 && <span className="admin-sub-badge">{shippingCount}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "completed" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("completed");
-                          setOrderSubTab("delivered");
-                        }}
-                      >
-                        <span>Delivered</span>
-                        {deliveredCount > 0 && <span className="admin-sub-badge">{deliveredCount}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "issues_returns" && orderSubTab === "cancelled" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("issues_returns");
-                          setOrderSubTab("cancelled");
-                        }}
-                      >
-                        <span>Cancelled</span>
-                        {cancelledCount > 0 && <span className="admin-sub-badge">{cancelledCount}</span>}
-                      </button>
-                      <button
-                        type="button"
-                        className={section === "orders" && orderMainTab === "issues_returns" && orderSubTab !== "cancelled" ? "active" : ""}
-                        onClick={() => {
-                          setOrdersOpen(true);
-                          navigate("orders");
-                          setOrderMainTab("issues_returns");
-                          setOrderSubTab("return_requested");
-                        }}
-                      >
-                        <span>Returns &amp; RTO</span>
-                        {returnsRtoCount > 0 && <span className="admin-sub-badge">{returnsRtoCount}</span>}
-                      </button>
-                    </div>
-                  )}
-                </SidebarMenuItem>
-              ))}
+
+                    {isOrders && (
+                      <div className={`admin-accordion-collapse ${isExpanded ? "expanded" : ""}`}>
+                        <div className="admin-accordion-inner">
+                          <div className="admin-product-submenu">
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "overview" && orderSubTab === "all" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("overview");
+                                setOrderSubTab("all");
+                              }}
+                            >
+                              <span>All Orders</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "new_csr" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("new_csr");
+                                setOrderSubTab("csr_confirmation");
+                              }}
+                            >
+                              <span>New &amp; CSR</span>
+                              {newCsrCount > 0 && <span className="admin-sub-badge">{newCsrCount}</span>}
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "fulfillment" && orderSubTab !== "packing" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("fulfillment");
+                                setOrderSubTab("confirmed");
+                              }}
+                            >
+                              <span>Fulfillment</span>
+                              {fulfillmentCount > 0 && <span className="admin-sub-badge">{fulfillmentCount}</span>}
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "fulfillment" && orderSubTab === "packing" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("fulfillment");
+                                setOrderSubTab("packing");
+                              }}
+                            >
+                              <span>Pack &amp; Airway Bill</span>
+                              {packAwbCount > 0 && <span className="admin-sub-badge">{packAwbCount}</span>}
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "shipping" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("shipping");
+                                setOrderSubTab("ready_to_ship");
+                              }}
+                            >
+                              <span>Shipping</span>
+                              {shippingCount > 0 && <span className="admin-sub-badge">{shippingCount}</span>}
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "completed" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("completed");
+                                setOrderSubTab("delivered");
+                              }}
+                            >
+                              <span>Delivered</span>
+                              {deliveredCount > 0 && <span className="admin-sub-badge">{deliveredCount}</span>}
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "issues_returns" && orderSubTab === "cancelled" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("issues_returns");
+                                setOrderSubTab("cancelled");
+                              }}
+                            >
+                              <span>Cancelled</span>
+                              {cancelledCount > 0 && <span className="admin-sub-badge">{cancelledCount}</span>}
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "orders" && orderMainTab === "returns" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("orders");
+                                navigate("orders");
+                                setOrderMainTab("returns");
+                              }}
+                            >
+                              <span>Returns &amp; Refunds</span>
+                              {openReturnsCount > 0 && <span className="admin-sub-badge">{openReturnsCount}</span>}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {isSettings && (
+                      <div className={`admin-accordion-collapse ${isExpanded ? "expanded" : ""}`}>
+                        <div className="admin-accordion-inner">
+                          <div className="admin-settings-submenu">
+                            <button
+                              type="button"
+                              className={section === "settings" && settingsSubTab === "store_settings" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("settings");
+                                setSection("settings");
+                                setSettingsSubTab("store_settings");
+                              }}
+                            >
+                              <span>Store Settings</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "settings" && settingsSubTab === "store_setup" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("settings");
+                                setSection("settings");
+                                setSettingsSubTab("store_setup");
+                              }}
+                            >
+                              <span>Store setup</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "settings" && settingsSubTab === "offers" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("settings");
+                                setSection("settings");
+                                setSettingsSubTab("offers");
+                              }}
+                            >
+                              <span>Offers</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "settings" && settingsSubTab === "coupons" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("settings");
+                                setSection("settings");
+                                setSettingsSubTab("coupons");
+                              }}
+                            >
+                              <span>Coupons</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "settings" && settingsSubTab === "info_pages" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("settings");
+                                setSection("settings");
+                                setSettingsSubTab("info_pages");
+                              }}
+                            >
+                              <span>Information Pages</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "settings" && settingsSubTab === "theme_setting" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("settings");
+                                setSection("settings");
+                                setSettingsSubTab("theme_setting");
+                              }}
+                            >
+                              <span>Theme setting</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={section === "settings" && settingsSubTab === "categories" ? "active" : ""}
+                              onClick={() => {
+                                setExpandedSection("settings");
+                                setSection("settings");
+                                setSettingsSubTab("categories");
+                              }}
+                            >
+                              <span>Category Settings</span>
+                              <ChevronDown size={14} style={{ color: "#8b96aa", marginLeft: "auto" }} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </SidebarMenuItem>
+                );
+              })}
           </SidebarMenu>
           <a className="admin-visit" href="/admin/team">
             <ShieldCheck size={18} />
@@ -2707,9 +3392,9 @@ export default function Admin() {
         <div className="admin-topbar">
           <div>
             <SidebarTrigger />
-            <span className="seller-avatar">Z</span>
+            <span className="seller-avatar">C</span>
             <div className="seller-greeting">
-              <small>Zeliy Pakistan</small>
+              <small>Cartify Pakistan</small>
               <b>Good morning, {data?.name || "store team"}</b>
             </div>
           </div>
@@ -2797,7 +3482,7 @@ export default function Admin() {
             }
           >
             <div>
-              <span className="admin-overline">ZELIY PAKISTAN</span>
+              <span className="admin-overline">CARTIFY PAKISTAN</span>
               <h1>{section === "overview" ? "Dashboard" : heading}</h1>
               <p>
                 {section === "overview"
@@ -2810,7 +3495,21 @@ export default function Admin() {
                         ? "Add customer reviews manually and manage approval status."
                       : section === "customers"
                         ? "Customer details from your saved test orders."
-                        : "Manage delivery charges and customer support details."}
+                      : section === "settings"
+                        ? settingsSubTab === "store_settings"
+                          ? "Manage store branding, custom logo, tagline, and customer support contact details."
+                          : settingsSubTab === "store_setup"
+                            ? "Configure Pakistan delivery charges, free delivery threshold, and Cash on Delivery payment rules."
+                            : settingsSubTab === "offers"
+                              ? "Create automatic checkout discounts, bundle volume deals, and promotional campaigns."
+                              : settingsSubTab === "coupons"
+                                ? "Manage promo discount codes and discount vouchers for customer checkout."
+                                : settingsSubTab === "info_pages"
+                                  ? "Edit customer service policies, About Us, Shipping policy, Return policy, and Terms."
+                                  : settingsSubTab === "theme_setting"
+                                    ? "Manage hero banner carousel slides, autoplay speed, and promotional banner cards."
+                                    : "Organize storefront navigation menus and product category taxonomy."
+                        : "Manage store settings."}
               </p>
             </div>
             <div className="admin-heading-actions">
@@ -2867,9 +3566,8 @@ export default function Admin() {
                     orders={orders}
                     products={products}
                     canOrders={data.permissions.includes("orders.manage")}
-                    navigate={(s, status) => {
-                      navigate(s);
-                      if (status) setFilter(status);
+                    navigate={(s, opts) => {
+                      navigate(s, opts);
                     }}
                     edit={(p) => {
                       setEditing(p);
@@ -2891,7 +3589,6 @@ export default function Admin() {
                     return ok;
                   }} />
                 )}
-                {section === "categories" && <Categories onChange={(categories) => setData((current) => current ? { ...current, categories } : current)} />}
                 {section === "orders" && (
                   <div className="admin-card">
                     {/* Live Clickable 6 Top Order KPI Summary Cards */}
@@ -2968,12 +3665,17 @@ export default function Admin() {
                       <button
                         type="button"
                         className={`order-kpi-pill ${orderMainTab === "completed" && orderSubTab === "cod_pending" ? "active" : ""}`}
-                        onClick={() => { setOrderMainTab("completed"); setOrderSubTab("cod_pending"); }}
+                        onClick={() => setCodSettlementOpen(true)}
                         style={{ marginLeft: "auto", background: orderMainTab === "completed" && orderSubTab === "cod_pending" ? "#f8fafc" : undefined }}
+                        title="Open COD Remittance Reconciliation & Settlement Manager"
                       >
-                        <span style={{ color: "#64748b", fontWeight: 600 }}>💰 Pending COD:</span>
+                        <span style={{ color: "#64748b", fontWeight: 600 }}>💰 Settle COD:</span>
                         <span className="order-kpi-count" style={{ color: "#059669" }}>
-                          {money(orders.filter((o) => o.status !== "Cancelled" && o.status !== "Delivered").reduce((sum, o) => sum + (o.total || 0), 0))}
+                          {money(
+                            orders
+                              .filter((o) => o.status === "Delivered" || o.status === "COD Settled")
+                              .reduce((sum, o) => sum + calculateCodBreakdown(o as any).remainingAmount, 0)
+                          )}
                         </span>
                       </button>
                     </div>
@@ -2987,6 +3689,7 @@ export default function Admin() {
                         { id: "shipping" as OrderMainTab, label: "Shipping", icon: Truck, count: orders.filter((o) => ["Shipped", "Dispatched", "Out for Delivery", "In Transit"].includes(o.status) || (["Pack & AirwayBill", "Packing", "Processing", "Ready to Ship"].includes(o.status) && !!o.details.trackingNumber)).length },
                         { id: "completed" as OrderMainTab, label: "Completed", icon: CheckCircle2, count: orders.filter((o) => o.status === "Delivered").length },
                         { id: "issues_returns" as OrderMainTab, label: "Issues & Returns", icon: AlertTriangle, count: orders.filter((o) => ["Failed Delivery", "RTO", "Returned", "Refunded", "On Hold"].includes(o.status) || o.details.rtoRisk === "high" || o.status === "Cancelled" || o.details.csrStatus === "Cancelled by Customer" || o.details.returnStatus === "Requested").length },
+                        { id: "returns" as OrderMainTab, label: "Returns & Refunds", icon: RotateCcw, count: returnRequests.length },
                       ].map((tab) => {
                         const TabIcon = tab.icon;
                         return (
@@ -3003,6 +3706,7 @@ export default function Admin() {
                                 shipping: ["ready_to_ship", "shipped", "in_transit", "out_for_delivery", "failed_delivery"],
                                 completed: ["delivered", "cod_pending", "cod_collected"],
                                 issues_returns: ["on_hold", "cancelled", "failed_delivery", "return_requested", "returned", "rto", "refunds"],
+                                returns: ["all"],
                               };
                               const available = currentSubs[tab.id];
                               if (available && !available.includes(orderSubTab)) {
@@ -3018,8 +3722,17 @@ export default function Admin() {
                       })}
                     </div>
 
-                    {/* Tier 2 Secondary Sub-Tabs (Dynamic based on selected main tab) */}
-                    <div className="orders-sub-tabs">
+                    {orderMainTab === "returns" ? (
+                      <ReturnsView
+                        returns={returnRequests}
+                        onSelectReturn={(ret) => setSelectedReturn(ret)}
+                        onOpenCreateReturn={() => setCreateReturnModalOpen(true)}
+                        busy={busy}
+                      />
+                    ) : (
+                      <>
+                        {/* Tier 2 Secondary Sub-Tabs (Dynamic based on selected main tab) */}
+                        <div className="orders-sub-tabs">
                       {orderMainTab === "overview" && [
                         { id: "all", label: "All Orders", count: orders.length },
                         { id: "csr_confirmation", label: "📞 CSR Confirmation", count: orders.filter((o) => (!o.details.csrStatus || o.details.csrStatus === "Pending" || o.details.csrStatus === "Callback Requested" || o.details.csrStatus?.startsWith("No Answer")) && o.status !== "Cancelled" && o.status !== "Delivered").length },
@@ -3200,6 +3913,16 @@ export default function Admin() {
                           disabled={!data || busy}
                         >
                           <Plus size={14} /> Place Manual Order
+                        </button>
+
+                        <button
+                          type="button"
+                          className="admin-secondary"
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 12, fontWeight: 600 }}
+                          onClick={() => exportOrdersToCSV((filteredOrders.length ? filteredOrders : orders) as LifecycleOrder[])}
+                          title="Export displayed orders to Excel / CSV"
+                        >
+                          <FileText size={14} /> Export CSV
                         </button>
 
                         <button
@@ -3398,26 +4121,41 @@ export default function Admin() {
 
                           <button
                             type="button"
-                            className="bulk-action-btn delete"
-                            disabled={busy}
-                            onClick={async () => {
-                              if (window.confirm(`Are you sure you want to delete ${selectedOrderIds.length} selected orders? This cannot be undone and will restore stock.`)) {
-                                const idsToDelete = [...selectedOrderIds];
-                                await write({ action: "delete-order", id: idsToDelete });
-                                setData((curr) => curr ? {
-                                  ...curr,
-                                  orders: curr.orders.filter((o) => !idsToDelete.includes(o.id))
-                                } : curr);
-                                if (selected && idsToDelete.includes(selected.id)) {
-                                  setSelected(null);
-                                }
-                                toast.success(`${idsToDelete.length} orders deleted`);
-                                setSelectedOrderIds([]);
-                              }
+                            className="bulk-action-btn"
+                            style={{ background: "#f8fafc", color: "#334155", border: "1px solid #cbd5e1" }}
+                            onClick={() => {
+                              const selectedList = orders.filter((o) => selectedOrderIds.includes(o.id));
+                              exportOrdersToCSV(selectedList as LifecycleOrder[]);
                             }}
+                            title="Export selected orders to CSV"
                           >
-                            <Trash2 size={14} /> Delete Selected ({selectedOrderIds.length})
+                            <FileText size={14} /> Export CSV ({selectedOrderIds.length})
                           </button>
+
+                          {data?.role === "super_admin" && (
+                            <button
+                              type="button"
+                              className="bulk-action-btn delete"
+                              disabled={busy}
+                              onClick={async () => {
+                                if (window.confirm(`Super Admin: Are you sure you want to permanently delete ${selectedOrderIds.length} selected orders? This cannot be undone and will restore stock.`)) {
+                                  const idsToDelete = [...selectedOrderIds];
+                                  await write({ action: "delete-order", id: idsToDelete });
+                                  setData((curr) => curr ? {
+                                    ...curr,
+                                    orders: curr.orders.filter((o) => !idsToDelete.includes(o.id))
+                                  } : curr);
+                                  if (selected && idsToDelete.includes(selected.id)) {
+                                    setSelected(null);
+                                  }
+                                  toast.success(`${idsToDelete.length} orders deleted`);
+                                  setSelectedOrderIds([]);
+                                }
+                              }}
+                            >
+                              <Trash2 size={14} /> Delete Selected ({selectedOrderIds.length})
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
@@ -3450,18 +4188,35 @@ export default function Admin() {
                       Showing {filteredOrders.length} of {orders.length} orders
                       · Latest 1,000 orders
                     </div>
+                  </>
+                )}
+              </div>
+            )}
+                {section === "new_product" && (
+                  <div className="admin-card" style={{ padding: 0, background: "transparent", border: 0, boxShadow: "none" }}>
+                    <ProductEditor mode="create" />
+                  </div>
+                )}
+                {section === "edit_product" && (
+                  <div className="admin-card" style={{ padding: 0, background: "transparent", border: 0, boxShadow: "none" }}>
+                    <ProductEditor mode="edit" initialProductId={editingProductId || new URLSearchParams(typeof window !== "undefined" ? window.location.search : "").get("id") || undefined} />
                   </div>
                 )}
                 {section === "products" && (
                   <div className="admin-card">
-                    <div className="product-filter-panel">
-                      <label>Group<input placeholder="Search group" value={query} onChange={(e)=>setQuery(e.target.value)}/></label>
-                      <label>Title/Name<input placeholder="Search by title or name" value={query} onChange={(e)=>setQuery(e.target.value)}/></label>
-                      <label>Category<select value={categoryFilter} onChange={(e)=>setCategoryFilter(e.target.value)}><option value="">Select Category</option>{categoryOptions.filter(c=>c!=='All products').map(c=><option key={c} value={c}>{c}</option>)}</select></label>
-                      <label>Group Status<select value={groupStatusFilter} onChange={(e)=>setGroupStatusFilter(e.target.value)}><option value="">Select Group Status</option><option value="Active">Active</option><option value="Draft">Draft</option></select></label>
-                      <label>Product Status<select value={filter} onChange={(e)=>setFilter(e.target.value)}><option value="All statuses">All statuses</option><option value="Active">Active</option><option value="Draft">Draft</option></select></label>
-                      <label>Stock<select value={stockFilter} onChange={(e)=>setStockFilter(e.target.value)}><option value="">Select Stock</option><option value="In stock">In stock</option><option value="Out of stock">Out of stock</option></select></label>
-                      <div className="product-filter-actions"><button type="button" onClick={()=>{setQuery('');setFilter('All statuses');setCategoryFilter('');setGroupStatusFilter('');setStockFilter('')}}>× Clear</button></div>
+                    <div className="products-section-head">
+                      <div>
+                        <span className="products-section-kicker">Inventory catalog</span>
+                        <h2>Products</h2>
+                        <p>Review product details, pricing, stock, images and variants from one place.</p>
+                      </div>
+                      <div className="products-section-stats" aria-label="Product summary">
+                        <span><b>{productStats.total}</b> Total</span>
+                        <span><b>{productStats.active}</b> Active</span>
+                        <span><b>{productStats.draft}</b> Draft</span>
+                        <span className={productStats.lowStock ? "attention" : ""}><b>{productStats.lowStock}</b> Low stock</span>
+                        <span className={productStats.outOfStock ? "danger" : ""}><b>{productStats.outOfStock}</b> Out of stock</span>
+                      </div>
                     </div>
                     <div className="admin-toolbar">
                       <div className="admin-search">
@@ -3469,7 +4224,7 @@ export default function Admin() {
                         <input
                           value={query}
                           onChange={(e) => setQuery(e.target.value)}
-                          placeholder="Search products or categories"
+                          placeholder="Search by product, category, color or SKU"
                           aria-label="Search products"
                         />
                       </div>
@@ -3481,490 +4236,670 @@ export default function Admin() {
                       />
                     </div>
                     <div className="product-bulk-bar">
-                      <label><input type="checkbox" checked={productRows.length > 0 && productRows.every((p) => selectedProductIds.includes(p.id))} onChange={(event) => setSelectedProductIds(event.target.checked ? Array.from(new Set([...selectedProductIds, ...productRows.map((p) => p.id)])) : selectedProductIds.filter((id) => !productRows.some((p) => p.id === id)))} /> Select all visible</label>
+                      <label><input type="checkbox" checked={productRows.length > 0 && productRows.every((p) => selectedProductIds.includes(p.id))} onChange={(event) => setSelectedProductIds(event.target.checked ? Array.from(new Set([...selectedProductIds, ...productRows.map((p) => p.id)])) : selectedProductIds.filter((id) => !productRows.some((p) => p.id === id)))} /> Select visible products</label>
                       <span>{selectedProductIds.length} selected</span>
-                      <button type="button" className="product-delete-bulk" disabled={!selectedProductIds.length || busy} onClick={() => deleteProducts(selectedProductIds)}><Trash2 size={14} /> Bulk Delete</button>
+                      <button type="button" className="product-delete-bulk" disabled={!selectedProductIds.length || busy} onClick={() => deleteProducts(selectedProductIds)}><Trash2 size={14} /> Delete selected</button>
                     </div>
-                    <div className="product-groups-list" style={{ display: "flex", flexDirection: "column", gap: 16, padding: "16px 20px" }}>
-                      {productRows.map((p) => (
-                        <div
-                          className="product-group-row"
-                          key={p.id}
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "32px 72px minmax(200px, 1fr) 180px 120px 140px",
-                            alignItems: "center",
-                            gap: 16,
-                            padding: "16px 20px",
-                            border: "1px solid #e2e8f0",
-                            borderRadius: 12,
-                            background: "#ffffff",
-                            boxShadow: "0 1px 4px rgba(0,0,0,0.03)",
-                            transition: "border-color 0.15s ease, box-shadow 0.15s ease",
-                          }}
-                        >
-                          {/* Checkbox */}
-                          <input
-                            className="product-select"
-                            type="checkbox"
-                            checked={selectedProductIds.includes(p.id)}
-                            onChange={(event) =>
-                              setSelectedProductIds((current) =>
-                                event.target.checked
-                                  ? Array.from(new Set([...current, p.id]))
-                                  : current.filter((id) => id !== p.id)
-                              )
-                            }
-                            aria-label={'Select ' + p.name}
-                            style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#203664" }}
-                          />
+                    <div className="product-groups-list">
+                      {productRows.map((p) => {
+                        const isSelected = selectedProductIds.includes(p.id);
+                        const colorsList = colorVariantsFor(p);
+                        const hasVariants = colorsList.length > 0;
 
-                          {/* Image Thumbnail */}
-                          <button
-                            type="button"
-                            className="product-image-button"
-                            onClick={() => setImageEditing(p)}
-                            aria-label={'Add images for ' + p.name}
-                            style={{
-                              width: 64,
-                              height: 64,
-                              padding: 4,
-                              border: "1px solid #cbd5e1",
-                              borderRadius: 10,
-                              background: "#f8fafc",
-                              cursor: "pointer",
-                              overflow: "hidden",
-                              display: "grid",
-                              placeItems: "center",
-                            }}
-                          >
-                            <img
-                              src={photo(p)}
-                              alt={p.name}
-                              style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 6 }}
-                            />
-                          </button>
+                        // Single Source of Truth Stock calculation
+                        const totalGroupStock = (p.variants && p.variants.length > 0)
+                          ? p.variants.reduce((sum, v) => sum + Number(v.stock || 0), 0)
+                          : colorsList.length > 0
+                            ? colorsList.reduce((sum, item) => sum + Number((item as any).stock ?? 0), 0)
+                            : Number((p as any).stock ?? 0);
 
-                          {/* Title & SKU & Variant Tag */}
-                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                            <strong style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", lineHeight: 1.3 }}>
-                              {p.name}
-                            </strong>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#64748b" }}>
-                              <span>SKU: {p.sku || p.id}</span>
-                              <button
-                                type="button"
-                                className="sku-edit"
-                                aria-label={'Edit SKU for ' + p.name}
-                                style={{ border: 0, background: "none", cursor: "pointer", padding: 0, color: "#94a3b8" }}
-                              >
-                                <Pencil size={11} />
-                              </button>
-                            </div>
-                            {colorVariantsFor(p).length > 0 && (
-                              <small className="product-variants-summary" style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-                                <b style={{ color: "#203664", fontWeight: 600 }}>{colorVariantsFor(p).length} Colour {colorVariantsFor(p).length === 1 ? "Variant" : "Variants"}</b>: {colorVariantsFor(p).map((item) => item.color || item.name).join(", ")}
-                              </small>
-                            )}
-                          </div>
+                        const invStatus = getInventoryStatus(p as any);
+                        const badgeStyles: Record<string, { bg: string; color: string; border: string }> = {
+                          "In Stock": { bg: "#f0fdf4", color: "#16a34a", border: "#bbf7d0" },
+                          "Low Stock": { bg: "#fef3c7", color: "#d97706", border: "#fde68a" },
+                          "Out of Stock": { bg: "#fef2f2", color: "#dc2626", border: "#fecaca" },
+                          "Inactive": { bg: "#f8fafc", color: "#64748b", border: "#cbd5e1" },
+                        };
+                        const statusStyle = badgeStyles[invStatus] || badgeStyles["Inactive"];
 
-                          {/* Price Column */}
-                          <div className="product-price" style={{ display: "flex", flexDirection: "column", gap: 2, justifySelf: "end" }}>
-                            <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-                              <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500 }}>Rs.</span>
-                              <b style={{ fontSize: 15, fontWeight: 800, color: "#0f172a" }}>{money(p.price)}</b>
-                              {p.old > p.price && (
-                                <del style={{ fontSize: 11, color: "#94a3b8", marginLeft: 2 }}>{money(p.old)}</del>
-                              )}
-                              <button
-                                type="button"
-                                className="inline-edit"
-                                aria-label={'Edit price for ' + p.name}
-                                onClick={() => {
-                                  setPriceEditing(p);
-                                  setPriceValue(String(p.price));
-                                  setOriginalPriceValue(String(p.old || p.price));
-                                  setCostPriceValue(String(p.costPrice || ""));
-                                  setOfferPriceValue(String(p.offerPrice || ""));
-                                  setOfferStartValue(p.offerStart || "");
-                                  setOfferEndValue(p.offerEnd || "");
-                                  const groupVariants = variantsFor(p);
-                                  const pricesMap: Record<string, { price: string; old: string }> = {};
-                                  let hasCustomVariantPrices = false;
-                                  for (const v of groupVariants) {
-                                    pricesMap[v.id] = {
-                                      price: String(v.price),
-                                      old: String(v.old || v.price),
-                                    };
-                                    if (v.price !== p.price || (v.old || v.price) !== (p.old || p.price)) {
-                                      hasCustomVariantPrices = true;
-                                    }
+                        // Count all distinct sizes and total variants
+                        const allVariants = p.variants || [];
+                        const distinctSizes = new Set<string>();
+                        allVariants.forEach((v) => {
+                          if (v.size && v.size !== "Standard") distinctSizes.add(v.size);
+                        });
+                        if (distinctSizes.size === 0 && p.sizes) {
+                          p.sizes.forEach((s) => {
+                            if (s && s !== "Standard") distinctSizes.add(s);
+                          });
+                        }
+
+                        const inStockVariantsCount = allVariants.filter(
+                          (v) => Number(v.stock || 0) > ((v as any).lowStockThreshold ?? 5)
+                        ).length;
+                        const lowStockVariantsCount = allVariants.filter(
+                          (v) =>
+                            Number(v.stock || 0) > 0 &&
+                            Number(v.stock || 0) <= ((v as any).lowStockThreshold ?? 5)
+                        ).length;
+                        const outOfStockVariantsCount = allVariants.filter(
+                          (v) => Number(v.stock || 0) <= 0
+                        ).length;
+
+                        const currentFilter = productVariantFilter[p.id] || "all";
+
+                        return (
+                          <div className="product-row-wrapper" key={p.id}>
+                            {/* Clean Compact Header Card */}
+                            <div className="product-header-card">
+                              <div className="product-header-left">
+                                <input
+                                  className="product-select"
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(event) =>
+                                    setSelectedProductIds((current) =>
+                                      event.target.checked
+                                        ? Array.from(new Set([...current, p.id]))
+                                        : current.filter((id) => id !== p.id)
+                                    )
                                   }
-                                  setVariantPrices(pricesMap);
-                                  setPriceMode(hasCustomVariantPrices ? "variant" : "uniform");
-                                  setBundlePriceValues((p.bundles || []).map((b) => String(b.price)).join(", "));
-                                }}
-                                style={{ border: 0, background: "none", cursor: "pointer", padding: 2, color: "#94a3b8" }}
-                              >
-                                <Pencil size={12} />
-                              </button>
-                            </div>
-                            {p.costPrice ? (
-                              <small style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>
-                                Cost: <span style={{ color: "#475569" }}>{money(p.costPrice)}</span>
-                              </small>
-                            ) : null}
-                          </div>
+                                  aria-label={"Select " + p.name}
+                                  style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#2563eb", flexShrink: 0 }}
+                                />
 
-                          {/* Stock Column */}
-                          <div className="product-stock" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 500 }}>Stock:</span>
-                            {(() => {
-                              const colorsList = colorVariantsFor(p);
-                              const totalGroupStock = colorsList.length > 0
-                                ? colorsList.reduce((sum, item) => sum + Number((item as any).stock ?? 0), 0)
-                                : Number((p as any).stock ?? 0);
-                              return (
-                                <b style={{ fontSize: 14, fontWeight: 700, color: totalGroupStock > 0 ? "#16a34a" : "#dc2626" }}>
-                                  {totalGroupStock}
-                                </b>
-                              );
-                            })()}
-                            <button
-                              type="button"
-                              className="inline-edit"
-                              aria-label={'Edit stock for ' + p.name}
-                              onClick={() => openStockEditor(p)}
-                              style={{ border: 0, background: "none", cursor: "pointer", padding: 2, color: "#94a3b8" }}
-                            >
-                              <Pencil size={12} />
-                            </button>
-                          </div>
-
-                          {/* Action Buttons Column */}
-                          <div className="product-group-actions" style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                            {/* Main Active Toggle */}
-                            <button
-                              type="button"
-                              className={p.status === "Active" ? "main-status-toggle active" : "main-status-toggle"}
-                              disabled={busy}
-                              aria-pressed={p.status === "Active"}
-                              onClick={() => saveVariantGroupStatus(p, p.status === "Active" ? "Draft" : "Active")}
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                gap: 6,
-                                padding: "5px 12px",
-                                borderRadius: 8,
-                                fontSize: 11,
-                                fontWeight: 700,
-                                cursor: "pointer",
-                                border: p.status === "Active" ? "1px solid #bbf7d0" : "1px solid #cbd5e1",
-                                background: p.status === "Active" ? "#f0fdf4" : "#f8fafc",
-                                color: p.status === "Active" ? "#16a34a" : "#64748b",
-                              }}
-                            >
-                              <span aria-hidden="true" style={{ width: 28, height: 16 }} /> Main {p.status === "Active" ? "Active" : "Inactive"}
-                            </button>
-
-                            {/* Details Button */}
-                            <button
-                              type="button"
-                              className="product-edit"
-                              onClick={() => {
-                                location.href = "/admin/products/edit?id=" + encodeURIComponent(p.id);
-                              }}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                padding: "6px 12px",
-                                borderRadius: 8,
-                                background: "#203664",
-                                color: "#ffffff",
-                                fontSize: 11,
-                                fontWeight: 600,
-                                border: 0,
-                                cursor: "pointer",
-                              }}
-                            >
-                              Details
-                            </button>
-
-                            {/* Add colour Button */}
-                            <button
-                              type="button"
-                              className="product-action"
-                              onClick={() => {
-                                setAddColorChoice("");
-                                setAddColorSource(p);
-                              }}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                padding: "5px 12px",
-                                borderRadius: 8,
-                                background: "#ffffff",
-                                color: "#2563eb",
-                                fontSize: 11,
-                                fontWeight: 600,
-                                border: "1px solid #bfdbfe",
-                                cursor: "pointer",
-                              }}
-                            >
-                              Add colour
-                            </button>
-
-                            {/* Add stock Button */}
-                            <button
-                              type="button"
-                              className="product-action"
-                              onClick={() => openStockEditor(p)}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                padding: "5px 12px",
-                                borderRadius: 8,
-                                background: "#ffffff",
-                                color: "#2563eb",
-                                fontSize: 11,
-                                fontWeight: 600,
-                                border: "1px solid #bfdbfe",
-                                cursor: "pointer",
-                              }}
-                            >
-                              Add stock
-                            </button>
-
-                            {/* Delete Button */}
-                            <button
-                              type="button"
-                              className="product-delete"
-                              disabled={busy}
-                              onClick={() => deleteProducts([p.id])}
-                              style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                gap: 4,
-                                padding: "5px 12px",
-                                borderRadius: 8,
-                                background: "#fef2f2",
-                                color: "#dc2626",
-                                fontSize: 11,
-                                fontWeight: 600,
-                                border: "1px solid #fecaca",
-                                cursor: "pointer",
-                              }}
-                            >
-                              <Trash2 size={12} /> Delete
-                            </button>
-                          </div>
-
-                          {/* Child Color Matrix Section (Matching user reference layout) */}
-                          {colorVariantsFor(p).length > 0 && (
-                            <div
-                              className="product-color-matrix"
-                              style={{
-                                gridColumn: "1 / -1",
-                                marginTop: 12,
-                                paddingTop: 14,
-                                borderTop: "1px solid #eef2f7",
-                                background: "#f8fafc",
-                                borderRadius: 10,
-                                padding: 14,
-                                overflowX: "auto",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  display: "grid",
-                                  gridTemplateColumns: `100px repeat(${colorVariantsFor(p).length}, minmax(110px, 140px))`,
-                                  gap: 12,
-                                  alignItems: "center",
-                                  textAlign: "center",
-                                  fontSize: 12,
-                                }}
-                              >
-                                {/* Header / Label Column */}
-                                <div style={{ display: "flex", flexDirection: "column", gap: 16, textAlign: "left", fontWeight: 700, color: "#475569" }}>
-                                  <span style={{ height: 60, display: "flex", alignItems: "center" }}>Variants</span>
-                                  <span style={{ height: 24, display: "flex", alignItems: "center" }}>Total Stock</span>
-                                  <span style={{ height: 32, display: "flex", alignItems: "center" }}>Action</span>
-                                </div>
-
-                                {/* Each Child Color Variant */}
-                                {colorVariantsFor(p).map((variant) => (
-                                  <div key={variant.id} style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center", background: "#ffffff", padding: "10px 8px", borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                                      {/* Clickable Image Thumbnail to Update Images */}
-                                      <button
-                                        type="button"
-                                        onClick={() => setImageEditing(variant)}
-                                        title={`Update image for ${variant.color || variant.name}`}
-                                        style={{ border: 0, background: "none", cursor: "pointer", padding: 0 }}
-                                      >
-                                        {photo(variant) && photo(variant) !== "/images/placeholder.jpg" ? (
-                                          <img src={photo(variant)} alt={variant.color || variant.name} style={{ width: 36, height: 36, objectFit: "contain", borderRadius: 6, background: "#f1f5f9" }} />
-                                        ) : (
-                                          <div style={{ width: 36, height: 36, borderRadius: 6, background: "#f1f5f9", display: "grid", placeItems: "center", color: "#94a3b8", border: "1px dashed #cbd5e1" }} title="Click to upload image for this color">
-                                            <ImageIcon size={18} />
-                                          </div>
-                                        )}
-                                      </button>
-                                      <span style={{ fontSize: 11, fontWeight: 700, color: "#1e293b" }}>{variant.sku || variant.id}</span>
-                                      <span style={{ fontSize: 10, fontWeight: 600, color: "#2563eb" }}>{variant.color || variant.name}</span>
-                                    </div>
-                                    <b style={{ fontSize: 13, color: "#0f172a" }}>{(variant as any).stock ?? 0}</b>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                      <button
-                                        type="button"
-                                        disabled={busy}
-                                        onClick={() => saveProductStatus(variant, variant.status === "Active" ? "Draft" : "Active")}
-                                        style={{
-                                          display: "inline-flex",
-                                          alignItems: "center",
-                                          gap: 6,
-                                          padding: "4px 8px",
-                                          borderRadius: 999,
-                                          fontSize: 11,
-                                          fontWeight: 600,
-                                          cursor: "pointer",
-                                          border: variant.status === "Active" ? "1px solid #16a34a" : "1px solid #cbd5e1",
-                                          background: variant.status === "Active" ? "#f0fdf4" : "#f8fafc",
-                                          color: variant.status === "Active" ? "#15803d" : "#64748b",
-                                        }}
-                                      >
-                                        <span
-                                          style={{
-                                            position: "relative",
-                                            display: "inline-block",
-                                            width: 28,
-                                            height: 16,
-                                            borderRadius: 999,
-                                            background: variant.status === "Active" ? "#16a34a" : "#cbd5e1",
-                                            transition: "background 0.2s ease",
-                                          }}
-                                        >
-                                          <span
-                                            style={{
-                                              position: "absolute",
-                                              top: 2,
-                                              left: variant.status === "Active" ? 14 : 2,
-                                              width: 12,
-                                              height: 12,
-                                              borderRadius: "50%",
-                                              background: "#ffffff",
-                                              boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
-                                              transition: "left 0.2s ease",
-                                            }}
-                                          />
-                                        </span>
-                                        <span>{variant.status === "Active" ? "Active" : "Draft"}</span>
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={busy}
-                                        title={`Delete ${variant.color || variant.name}`}
-                                        onClick={() => deleteProducts([variant.id])}
-                                        style={{ border: 0, background: "none", cursor: "pointer", color: "#ef4444", padding: 2 }}
-                                      >
-                                        <Trash2 size={12} />
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="product-list-summary">{filteredProducts.length} products · Grouped product list</div>
-                    <div className="admin-product-legacy">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Product</TableHead>
-                          <TableHead>Category</TableHead>
-                          <TableHead>Price</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Action</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredProducts.map((p) => (
-                          <TableRow key={p.id}>
-                            <TableCell>
-                              <div className="admin-product-cell">
+                                {/* 3-Tier Image Resolution Thumbnail */}
                                 <button
                                   type="button"
-                                  aria-label={`Update images for ${p.name}`}
-                                  title="Update product images"
-                                  style={{ padding: 0, border: 0, background: "transparent", cursor: "pointer" }}
-                                  onClick={() => {
-                                    setImageEditing(p);
-                                  }}
+                                  className="product-header-thumb"
+                                  onClick={() => setImageEditing(p)}
+                                  title="Manage product images & variant gallery"
                                 >
-                                  <img src={photo(p)} alt={`Update images for ${p.name}`} />
+                                  <img src={photo(p)} alt={p.name} />
                                 </button>
-                                <div>
-                                  <b>{p.name}</b>
-                                  <small>{p.id}</small>
+
+                                {/* Info */}
+                                <div className="product-header-info">
+                                  <h3 className="product-header-title">{p.name}</h3>
+                                  <div className="product-header-meta">
+                                    <span className="product-sku-pill">
+                                      SKU: {p.sku || p.id}
+                                    </span>
+                                    <span>•</span>
+                                    {hasVariants ? (
+                                      <span>
+                                        <b>{colorsList.length}</b> {colorsList.length === 1 ? "Color" : "Colors"} • <b>{distinctSizes.size > 0 ? distinctSizes.size : 1}</b> {distinctSizes.size === 1 ? "Size" : "Sizes"} • <b>{allVariants.length > 0 ? allVariants.length : colorsList.length}</b> Variants
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: "#64748b" }}>Simple Product (No variants)</span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
-                            </TableCell>
-                            <TableCell>{p.category}</TableCell>
-                            <TableCell>
-                              <b>{money(p.price)}</b>
-                              {p.old > p.price && (
-                                <small>
-                                  <del>{money(p.old)}</del>
-                                </small>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Badge status={p.status} />
-                            </TableCell>
-                            <TableCell>
-                              <button
-                                className="admin-edit"
-                                onClick={() => {
-                                  location.href = "/admin/products/edit?id=" + encodeURIComponent(p.id);
-                                }}
-                              >
-                                <Pencil size={15} />
-                                Edit
-                              </button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+
+                              {/* Center / Pricing & Dynamic Total Stock */}
+                              <div className="product-header-center">
+                                {/* Price */}
+                                <div className="product-price-box">
+                                  <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                                    <span className="product-price-main">{money(p.price)}</span>
+                                    {p.old > p.price && (
+                                      <span className="product-price-old">{money(p.old)}</span>
+                                    )}
+                                  </div>
+                                  {p.costPrice ? (
+                                    <span style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>
+                                      Cost: {money(p.costPrice)}
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                {/* Dynamic Total Stock (Single Source of Truth) */}
+                                <div className="product-stock-box">
+                                  <span className="product-stock-label">Total Stock</span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <span className="product-stock-val" style={{ color: totalGroupStock > 0 ? "#16a34a" : "#dc2626" }}>
+                                      {totalGroupStock} <span style={{ fontSize: 11, fontWeight: 500, color: "#64748b" }}>units</span>
+                                    </span>
+                                    <span
+                                      style={{
+                                        display: "inline-block",
+                                        padding: "2px 6px",
+                                        borderRadius: 4,
+                                        fontSize: 9.5,
+                                        fontWeight: 700,
+                                        textTransform: "uppercase",
+                                        letterSpacing: "0.3px",
+                                        background: statusStyle.bg,
+                                        color: statusStyle.color,
+                                        border: `1px solid ${statusStyle.border}`,
+                                      }}
+                                    >
+                                      {invStatus}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Unified Right Actions */}
+                              <div className="product-header-actions">
+                                {/* Edit Product */}
+                                <button
+                                  type="button"
+                                  className="btn-product-edit"
+                                  onClick={() => {
+                                    editProduct(p.id);
+                                  }}
+                                >
+                                  <Pencil size={13} />
+                                  Edit Product
+                                </button>
+
+                                {/* Primary Manage Inventory */}
+                                <button
+                                  type="button"
+                                  className="btn-manage-inventory"
+                                  onClick={() => {
+                                    setInventoryModalProduct(p);
+                                    setInventoryModalTargetColor(null);
+                                  }}
+                                >
+                                  <Layers size={14} />
+                                  Manage Inventory
+                                </button>
+
+                                {/* 3-dot Dropdown Actions Menu */}
+                                <div className="product-action-menu">
+                                  <button
+                                    type="button"
+                                    className={`btn-more-menu ${activeActionDropdown === p.id ? "active" : ""}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveActionDropdown(activeActionDropdown === p.id ? null : p.id);
+                                    }}
+                                    aria-label={`More actions for ${p.name}`}
+                                    aria-expanded={activeActionDropdown === p.id}
+                                    aria-haspopup="menu"
+                                    title="More actions"
+                                  >
+                                    <MoreVertical size={16} />
+                                  </button>
+
+                                  {activeActionDropdown === p.id && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="product-menu-backdrop"
+                                        aria-label="Close product actions"
+                                        onClick={() => setActiveActionDropdown(null)}
+                                      />
+                                      <div
+                                        className="product-action-dropdown"
+                                        role="menu"
+                                        onClick={(e) => e.stopPropagation()}
+                                        onMouseLeave={() => setActiveActionDropdown(null)}
+                                      >
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            setActiveActionDropdown(null);
+                                            setAddColorSource(p);
+                                          }}
+                                        >
+                                          <Plus size={14} style={{ color: "#2563eb" }} />
+                                          Add color
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            setActiveActionDropdown(null);
+                                            setStockHistoryModalProduct(p);
+                                            setStockHistoryVariantSku(null);
+                                            setStockHistoryVariantColor(null);
+                                            setStockHistoryVariantSize(null);
+                                          }}
+                                        >
+                                          <Clock size={14} style={{ color: "#2563eb" }} />
+                                          Stock history
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            setActiveActionDropdown(null);
+                                            saveVariantGroupStatus(p, p.status === "Active" ? "Draft" : "Active");
+                                          }}
+                                        >
+                                          <EyeOff size={14} style={{ color: "#64748b" }} />
+                                          Set as {p.status === "Active" ? "Draft" : "Active"}
+                                        </button>
+
+                                        <div className="product-dropdown-divider" />
+
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item danger"
+                                          role="menuitem"
+                                          disabled={busy}
+                                          onClick={() => {
+                                            setActiveActionDropdown(null);
+                                            deleteProducts([p.id]);
+                                          }}
+                                        >
+                                          <Trash2 size={14} />
+                                          Delete product
+                                        </button>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Status Summary Chips Bar (When variants exist) */}
+                            {hasVariants && (
+                              <div className="product-summary-chips-bar">
+                                <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.4px", marginRight: 4 }}>
+                                  Variants:
+                                </span>
+                                <button
+                                  type="button"
+                                  className={`summary-chip-btn ${currentFilter === "all" ? "active" : ""}`}
+                                  onClick={() => setProductVariantFilter((prev) => ({ ...prev, [p.id]: "all" }))}
+                                >
+                                  All Variants <span className="summary-chip-count">{allVariants.length || colorsList.length}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`summary-chip-btn ${currentFilter === "in_stock" ? "active" : ""}`}
+                                  onClick={() => setProductVariantFilter((prev) => ({ ...prev, [p.id]: "in_stock" }))}
+                                >
+                                  <span style={{ color: "#16a34a" }}>●</span> In Stock <span className="summary-chip-count">{inStockVariantsCount}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`summary-chip-btn ${currentFilter === "low_stock" ? "active" : ""}`}
+                                  onClick={() => setProductVariantFilter((prev) => ({ ...prev, [p.id]: "low_stock" }))}
+                                >
+                                  <span style={{ color: "#d97706" }}>●</span> Low Stock <span className="summary-chip-count">{lowStockVariantsCount}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`summary-chip-btn ${currentFilter === "out_of_stock" ? "active" : ""}`}
+                                  onClick={() => setProductVariantFilter((prev) => ({ ...prev, [p.id]: "out_of_stock" }))}
+                                >
+                                  <span style={{ color: "#dc2626" }}>●</span> Out of Stock <span className="summary-chip-count">{outOfStockVariantsCount}</span>
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Expandable Color Accordions Area */}
+                            {hasVariants && (
+                              <div className="product-variants-area">
+                                {colorsList.map((variant) => {
+                                  const vColorName = variant.color || variant.name || "Default";
+                                  const colorKey = `${p.id}:${vColorName}`;
+                                  const isExpanded = expandedColorRows[colorKey] ?? true; // expanded by default for instant visibility
+
+                                  // Filter size variants of this color based on selected chip filter
+                                  const colorVariants = (p.variants || []).filter(
+                                    (v) => (v.color || "").toLowerCase() === vColorName.toLowerCase()
+                                  );
+
+                                  const colorTotalStock = colorVariants.length > 0
+                                    ? colorVariants.reduce((sum, v) => sum + Number(v.stock || 0), 0)
+                                    : Number((variant as any).stock ?? 0);
+
+                                  const colorStatus = variant.status || (colorTotalStock > 0 ? "Active" : "Draft");
+
+                                  // Filter variants by chip filter
+                                  const filteredColorVariants = colorVariants.filter((v) => {
+                                    const vStock = Number(v.stock || 0);
+                                    const threshold = (v as any).lowStockThreshold ?? 5;
+                                    if (currentFilter === "in_stock") return vStock > threshold;
+                                    if (currentFilter === "low_stock") return vStock > 0 && vStock <= threshold;
+                                    if (currentFilter === "out_of_stock") return vStock <= 0;
+                                    return true;
+                                  });
+
+                                  return (
+                                    <div
+                                      key={variant.id || colorKey}
+                                      className={`color-accordion-card ${isExpanded ? "expanded" : ""}`}
+                                    >
+                                      {/* Compact Color Header Row */}
+                                      <div
+                                        className="color-accordion-header"
+                                        onClick={() =>
+                                          setExpandedColorRows((prev) => ({
+                                            ...prev,
+                                            [colorKey]: !isExpanded,
+                                          }))
+                                        }
+                                      >
+                                        <div className="color-header-left">
+                                          <span
+                                            className="color-swatch-circle"
+                                            style={{
+                                              background:
+                                                variant.colorHex ||
+                                                (vColorName.toLowerCase() === "white"
+                                                  ? "#f1f5f9"
+                                                  : vColorName.toLowerCase() === "black"
+                                                  ? "#000000"
+                                                  : "#2563eb"),
+                                            }}
+                                          />
+                                          <span className="color-name-heading">{vColorName}</span>
+                                          <span className="color-summary-tag">
+                                            {colorVariants.length > 0 ? `${colorVariants.length} Sizes` : "1 Size"} • {colorTotalStock} units • {colorStatus}
+                                          </span>
+                                        </div>
+
+                                        <div className="color-header-right" onClick={(e) => e.stopPropagation()}>
+                                          <button
+                                            type="button"
+                                            className="color-btn-quick"
+                                            onClick={() => {
+                                              setInventoryModalProduct(p);
+                                              setInventoryModalTargetColor(vColorName);
+                                            }}
+                                            title={`Manage stock for ${vColorName}`}
+                                          >
+                                            <Pencil size={11} />
+                                            Manage Stock
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            className="color-btn-quick"
+                                            style={{ color: "#dc2626", borderColor: "#fecaca" }}
+                                            onClick={() => {
+                                              setRemoveColorProduct(p);
+                                              setRemoveColorTarget({
+                                                id: variant.id,
+                                                color: vColorName,
+                                                stock: colorTotalStock,
+                                                sizes: variant.sizes,
+                                                sizeStock: variant.sizeStock,
+                                              });
+                                            }}
+                                            title={`Remove or disable ${vColorName}`}
+                                          >
+                                            <Trash2 size={11} />
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            className="color-btn-quick"
+                                            onClick={() =>
+                                              setExpandedColorRows((prev) => ({
+                                                ...prev,
+                                                [colorKey]: !isExpanded,
+                                              }))
+                                            }
+                                            title={isExpanded ? "Collapse" : "Expand"}
+                                            style={{ padding: "4px 6px" }}
+                                          >
+                                            <ChevronDown
+                                              size={15}
+                                              className={`color-chevron-icon ${isExpanded ? "expanded" : ""}`}
+                                            />
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {/* Expanded Variant Table */}
+                                      {isExpanded && (
+                                        <div className="color-variant-table-wrap">
+                                          {colorVariants.length === 0 ? (
+                                            <div style={{ padding: "12px 10px", color: "#64748b", fontSize: 12 }}>
+                                              Single variant with <b>{colorTotalStock} units</b> in stock.
+                                            </div>
+                                          ) : filteredColorVariants.length === 0 ? (
+                                            <div style={{ padding: "12px 10px", color: "#94a3b8", fontSize: 12, textAlign: "center" }}>
+                                              No size variants match &ldquo;{currentFilter.replace("_", " ")}&rdquo;.
+                                            </div>
+                                          ) : (
+                                            <table className="variant-inventory-table">
+                                              <thead>
+                                                <tr>
+                                                  <th style={{ width: 90 }}>Size</th>
+                                                  <th>Variant SKU</th>
+                                                  <th style={{ width: 110 }}>Price</th>
+                                                  <th style={{ width: 140, textAlign: "center" }}>Stock</th>
+                                                  <th style={{ width: 120 }}>Inventory Status</th>
+                                                  <th style={{ width: 100, textAlign: "center" }}>Status</th>
+                                                  <th style={{ width: 50, textAlign: "center" }}>Audit</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {filteredColorVariants.map((v) => {
+                                                  const vStock = Number(v.stock || 0);
+                                                  const threshold = (v as any).lowStockThreshold ?? 5;
+                                                  const isOos = vStock <= 0;
+                                                  const isLow = vStock > 0 && vStock <= threshold;
+                                                  const vStatusText = isOos ? "Out of Stock" : isLow ? "Low Stock" : "In Stock";
+                                                  const vStatusColor = isOos ? "#dc2626" : isLow ? "#d97706" : "#16a34a";
+                                                  const vStatusBg = isOos ? "#fef2f2" : isLow ? "#fef3c7" : "#f0fdf4";
+                                                  const vStatusBorder = isOos ? "#fecaca" : isLow ? "#fde68a" : "#bbf7d0";
+
+                                                  return (
+                                                    <tr key={v.id}>
+                                                      {/* Size */}
+                                                      <td>
+                                                        <span
+                                                          style={{
+                                                            background: "#f1f5f9",
+                                                            padding: "2px 7px",
+                                                            borderRadius: 4,
+                                                            fontWeight: 700,
+                                                            fontSize: 11.5,
+                                                            color: "#334155",
+                                                          }}
+                                                        >
+                                                          {v.size || "Standard"}
+                                                        </span>
+                                                      </td>
+
+                                                      {/* Variant SKU */}
+                                                      <td>
+                                                        <code
+                                                          style={{
+                                                            background: "#f8fafc",
+                                                            border: "1px solid #e2e8f0",
+                                                            padding: "2px 6px",
+                                                            borderRadius: 4,
+                                                            fontSize: 11,
+                                                            fontFamily: "monospace",
+                                                            color: "#475569",
+                                                            fontWeight: 600,
+                                                          }}
+                                                        >
+                                                          {v.sku || `${p.sku || "PROD"}-${vColorName.toUpperCase()}-${(v.size || "STD").toUpperCase()}`}
+                                                        </code>
+                                                      </td>
+
+                                                      {/* Price */}
+                                                      <td>
+                                                        <span style={{ fontWeight: 600, color: "#0f172a" }}>
+                                                          {money(v.price || p.price)}
+                                                        </span>
+                                                      </td>
+
+                                                      {/* Stock Quantity Stepper */}
+                                                      <td>
+                                                        <div className="stock-stepper-cell">
+                                                          <button
+                                                            type="button"
+                                                            className="stock-stepper-btn"
+                                                            disabled={vStock <= 0 || busy}
+                                                            onClick={() => updateSingleVariantStock(p, v.id, vStock - 1)}
+                                                            title="Decrease stock by 1"
+                                                          >
+                                                            <Minus size={11} />
+                                                          </button>
+                                                          <input
+                                                            type="number"
+                                                            min="0"
+                                                            defaultValue={vStock}
+                                                            key={`${v.id}-${vStock}`}
+                                                            onBlur={(e) => {
+                                                              const val = Number(e.target.value);
+                                                              if (val !== vStock && Number.isFinite(val) && val >= 0) {
+                                                                updateSingleVariantStock(p, v.id, val);
+                                                              }
+                                                            }}
+                                                            onKeyDown={(e) => {
+                                                              if (e.key === "Enter") {
+                                                                e.currentTarget.blur();
+                                                              }
+                                                            }}
+                                                            className="stock-stepper-input"
+                                                          />
+                                                          <button
+                                                            type="button"
+                                                            className="stock-stepper-btn"
+                                                            disabled={busy}
+                                                            onClick={() => updateSingleVariantStock(p, v.id, vStock + 1)}
+                                                            title="Increase stock by 1"
+                                                          >
+                                                            <Plus size={11} />
+                                                          </button>
+                                                        </div>
+                                                      </td>
+
+                                                      {/* Inventory Status Badge */}
+                                                      <td>
+                                                        <span
+                                                          style={{
+                                                            display: "inline-flex",
+                                                            alignItems: "center",
+                                                            gap: 4,
+                                                            padding: "2px 7px",
+                                                            borderRadius: 5,
+                                                            fontSize: 10.5,
+                                                            fontWeight: 700,
+                                                            background: vStatusBg,
+                                                            color: vStatusColor,
+                                                            border: `1px solid ${vStatusBorder}`,
+                                                          }}
+                                                        >
+                                                          <span
+                                                            style={{
+                                                              width: 5,
+                                                              height: 5,
+                                                              borderRadius: "50%",
+                                                              background: vStatusColor,
+                                                            }}
+                                                          />
+                                                          {vStatusText}
+                                                        </span>
+                                                      </td>
+
+                                                      {/* Active / Draft Availability Toggle */}
+                                                      <td style={{ textAlign: "center" }}>
+                                                        <button
+                                                          type="button"
+                                                          disabled={busy}
+                                                          onClick={() => {
+                                                            const nextStatus = v.status === "Active" ? "Draft" : "Active";
+                                                            const updatedVariants = (p.variants || []).map((x) =>
+                                                              x.id === v.id ? { ...x, status: nextStatus } : x
+                                                            );
+                                                            const updatedProduct = {
+                                                              ...p,
+                                                              variants: updatedVariants,
+                                                            };
+                                                            write({ action: "product", product: updatedProduct }).then((ok) => {
+                                                              if (ok) {
+                                                                load();
+                                                                toast.success(`Variant set to ${nextStatus}`);
+                                                              }
+                                                            });
+                                                          }}
+                                                          style={{
+                                                            border: v.status === "Active" ? "1px solid #bbf7d0" : "1px solid #cbd5e1",
+                                                            background: v.status === "Active" ? "#f0fdf4" : "#f8fafc",
+                                                            color: v.status === "Active" ? "#16a34a" : "#64748b",
+                                                            padding: "2px 8px",
+                                                            borderRadius: 10,
+                                                            fontSize: 10,
+                                                            fontWeight: 700,
+                                                            cursor: "pointer",
+                                                          }}
+                                                        >
+                                                          {v.status === "Active" ? "Active" : "Disabled"}
+                                                        </button>
+                                                      </td>
+
+                                                      {/* Audit Log Icon */}
+                                                      <td style={{ textAlign: "center" }}>
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => {
+                                                            setStockHistoryModalProduct(p);
+                                                            setStockHistoryVariantSku(v.sku || null);
+                                                            setStockHistoryVariantColor(vColorName);
+                                                            setStockHistoryVariantSize(v.size || null);
+                                                          }}
+                                                          title={`View audit history for ${v.sku || v.size}`}
+                                                          style={{
+                                                            border: 0,
+                                                            background: "none",
+                                                            cursor: "pointer",
+                                                            color: "#2563eb",
+                                                            padding: 3,
+                                                            borderRadius: 4,
+                                                          }}
+                                                        >
+                                                          <Clock size={14} />
+                                                        </button>
+                                                      </td>
+                                                    </tr>
+                                                  );
+                                                })}
+                                              </tbody>
+                                            </table>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                    {!filteredProducts.length && (
-                      <div className="admin-empty">
-                        <Package />
-                        <h3>No matching products</h3>
-                        <button
-                          onClick={() => {
-                            setQuery("");
-                            setFilter("All statuses");
-                          }}
-                        >
-                          Clear filters
-                        </button>
-                      </div>
-                    )}
-                    <div className="admin-table-foot">
-                      {filteredProducts.length} products · Drafts are hidden
-                      from your storefront
-                    </div>
-                  </div>
-                )}
+                     <div className="product-list-summary">
+                       Showing {productRows.length} product{productRows.length !== 1 ? "s" : ""}. Draft products are hidden from the storefront.
+                     </div>
+                     {!productRows.length && (
+                       <div className="admin-empty">
+                         <Package />
+                         <h3>No matching products</h3>
+                         <p>Try another keyword or clear the status filter.</p>
+                         <button
+                           onClick={() => {
+                             setQuery("");
+                             setFilter("All statuses");
+                           }}
+                         >
+                           Clear filters
+                         </button>
+                       </div>
+                     )}
+                   </div>
+                 )}
                 {section === "customers" && (
                   <div className="admin-card">
                     <div className="admin-toolbar">
@@ -4027,300 +4962,997 @@ export default function Admin() {
                   </div>
                 )}
                 {section === "settings" && config && (
-                  <form
-                    className="admin-settings"
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      setSettingsSaved(false);
-                      if (
-                        await write({ action: "settings", settings: config })
-                      ) {
-                        setData({ ...data, settings: config });
-                        setSettingsSaved(true);
-                        toast.success("Store settings saved");
-                      }
-                    }}
-                  >
-                    <div className="admin-card">
-                      <div className="admin-card-head">
-                        <div>
-                          <h2>Store branding & logo</h2>
-                          <p>Upload your store logo. Preview updates live on the right.</p>
-                        </div>
-                        <Store size={20} />
-                      </div>
-                      <div className="admin-fields">
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, alignItems: "stretch" }}>
-                          
-                          {/* Left Column: Upload & Tagline */}
-                          <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", justifyContent: "space-between" }}>
+                  <>
+                    {/* 1. Store Settings Subtab */}
+                    {settingsSubTab === "store_settings" && (
+                      <form
+                        className="admin-settings"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          setSettingsSaved(false);
+                          if (await write({ action: "settings", settings: config })) {
+                            setData({ ...data, settings: config });
+                            setSettingsSaved(true);
+                            toast.success("Store branding and contact settings saved");
+                          }
+                        }}
+                      >
+                        <div className="admin-card">
+                          <div className="admin-card-head">
                             <div>
-                              <span style={{ fontSize: 12, fontWeight: 600, color: "#1e293b", display: "block", marginBottom: 8 }}>
-                                Upload Logo File
-                              </span>
-                              <div
-                                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                                onDrop={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  const file = e.dataTransfer.files?.[0];
-                                  if (file) {
-                                    if (!file.type.startsWith("image/")) {
-                                      toast.error("Please drop an image file (PNG, JPG, SVG)");
-                                      return;
-                                    }
-                                    const reader = new FileReader();
-                                    reader.onload = (evt) => {
-                                      const result = evt.target?.result as string;
-                                      setSettingsSaved(false);
-                                      setConfig({ ...config, logo: result });
-                                      toast.success("Logo uploaded");
-                                    };
-                                    reader.readAsDataURL(file);
-                                  }
-                                }}
-                                style={{
-                                  border: "2px dashed #cbd5e1",
-                                  borderRadius: 10,
-                                  padding: "24px 16px",
-                                  textAlign: "center",
-                                  background: "#f8fafc",
-                                  cursor: "pointer",
-                                  transition: "all 0.15s ease",
-                                }}
-                                onClick={() => {
-                                  const input = document.createElement("input");
-                                  input.type = "file";
-                                  input.accept = "image/*";
-                                  input.onchange = (e: any) => {
-                                    const file = e.target.files?.[0];
-                                    if (file) {
-                                      const reader = new FileReader();
-                                      reader.onload = (evt) => {
-                                        const result = evt.target?.result as string;
-                                        setSettingsSaved(false);
-                                        setConfig({ ...config, logo: result });
-                                        toast.success("Logo uploaded");
-                                      };
-                                      reader.readAsDataURL(file);
-                                    }
-                                  };
-                                  input.click();
-                                }}
-                              >
-                                <Upload size={24} style={{ margin: "0 auto 6px", color: "#64748b" }} />
-                                <b style={{ display: "block", fontSize: 13, color: "#1e293b", marginBottom: 2 }}>
-                                  Click or drag & drop logo here
-                                </b>
-                                <span style={{ fontSize: 11, color: "#64748b", display: "block" }}>
-                                  Recommended size: 200px × 50px (Max height: 42px)
-                                </span>
-                              </div>
+                              <h2>Store branding & logo</h2>
+                              <p>Upload your store logo. Preview updates live on the right.</p>
                             </div>
+                            <Store size={20} />
+                          </div>
+                          <div className="admin-fields">
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 20, alignItems: "stretch" }}>
+                              
+                              {/* Left Column: Upload & Tagline */}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", justifyContent: "space-between" }}>
+                                <div>
+                                  <span style={{ fontSize: 12, fontWeight: 600, color: "#1e293b", display: "block", marginBottom: 8 }}>
+                                    Upload Logo File
+                                  </span>
+                                  <div
+                                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                    onDrop={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      const file = e.dataTransfer.files?.[0];
+                                      if (file) {
+                                        if (!file.type.startsWith("image/")) {
+                                          toast.error("Please drop an image file (PNG, JPG, SVG)");
+                                          return;
+                                        }
+                                        const reader = new FileReader();
+                                        reader.onload = (evt) => {
+                                          const result = evt.target?.result as string;
+                                          setSettingsSaved(false);
+                                          setConfig({ ...config, logo: result });
+                                          toast.success("Logo uploaded");
+                                        };
+                                        reader.readAsDataURL(file);
+                                      }
+                                    }}
+                                    style={{
+                                      border: "2px dashed #cbd5e1",
+                                      borderRadius: 10,
+                                      padding: "24px 16px",
+                                      textAlign: "center",
+                                      background: "#f8fafc",
+                                      cursor: "pointer",
+                                      transition: "all 0.15s ease",
+                                    }}
+                                    onClick={() => {
+                                      const input = document.createElement("input");
+                                      input.type = "file";
+                                      input.accept = "image/*";
+                                      input.onchange = (e: any) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const reader = new FileReader();
+                                          reader.onload = (evt) => {
+                                            const result = evt.target?.result as string;
+                                            setSettingsSaved(false);
+                                            setConfig({ ...config, logo: result });
+                                            toast.success("Logo uploaded");
+                                          };
+                                          reader.readAsDataURL(file);
+                                        }
+                                      };
+                                      input.click();
+                                    }}
+                                  >
+                                    <Upload size={24} style={{ margin: "0 auto 6px", color: "#64748b" }} />
+                                    <b style={{ display: "block", fontSize: 13, color: "#1e293b", marginBottom: 2 }}>
+                                      Click or drag & drop logo here
+                                    </b>
+                                    <span style={{ fontSize: 11, color: "#64748b", display: "block" }}>
+                                      Recommended size: 200px × 50px (Max height: 42px)
+                                    </span>
+                                  </div>
+                                </div>
 
-                            <label style={{ margin: 0 }}>
-                              Brand tagline
+                                <label style={{ margin: 0 }}>
+                                  Brand tagline
+                                  <input
+                                    value={config.logoText || ""}
+                                    onChange={(e) => {
+                                      setSettingsSaved(false);
+                                      setConfig({ ...config, logoText: e.target.value });
+                                    }}
+                                    placeholder="PAKISTAN"
+                                    maxLength={80}
+                                  />
+                                  <small>Shown under text logo when no image logo is uploaded (Default: PAKISTAN).</small>
+                                </label>
+                              </div>
+
+                              {/* Right Column: Active Logo Preview */}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%" }}>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: "#1e293b" }}>
+                                  Active Store Logo Preview
+                                </span>
+                                <div style={{
+                                  padding: 16,
+                                  background: "#ffffff",
+                                  border: "1px solid #e2e8f0",
+                                  borderRadius: 10,
+                                  flex: 1,
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  justifyContent: "space-between"
+                                }}>
+                                  <div>
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                                      <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.8px", color: "#64748b", fontWeight: 600 }}>
+                                        Live Header Display
+                                      </span>
+                                      <span style={{ fontSize: 11, color: "#64748b", background: "#f1f5f9", padding: "2px 8px", borderRadius: 4 }}>
+                                        {config.logo ? "Custom Image" : "Default Text"}
+                                      </span>
+                                    </div>
+                                    <div style={{ background: "#203664", padding: "20px 16px", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 90 }}>
+                                      {config.logo ? (
+                                        <img
+                                          src={config.logo}
+                                          alt="Active logo preview"
+                                          style={{ maxHeight: 42, maxWidth: 200, objectFit: "contain" }}
+                                          onError={(e) => (e.currentTarget.style.display = "none")}
+                                        />
+                                      ) : (
+                                        <a href="#" onClick={(e) => e.preventDefault()} style={{ color: "#ffffff", fontSize: 26, fontWeight: 700, textDecoration: "none", display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1 }}>
+                                          <span>cartify<span style={{ color: "#b68b69" }}>.</span></span>
+                                          <small style={{ fontSize: 9, color: "#a6b4cc", letterSpacing: "2.5px", marginTop: 4 }}>{config.logoText || "PAKISTAN"}</small>
+                                        </a>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span style={{ fontSize: 12, color: "#475569" }}>
+                                      {config.logo ? "Custom image logo active" : "Default text logo active"}
+                                    </span>
+                                    {config.logo && (
+                                      <button
+                                        type="button"
+                                        className="admin-secondary"
+                                        onClick={() => {
+                                          setSettingsSaved(false);
+                                          setConfig({ ...config, logo: "" });
+                                          toast.info("Logo removed");
+                                        }}
+                                        style={{ fontSize: 12, padding: "4px 10px" }}
+                                      >
+                                        Remove logo
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="admin-card">
+                          <div className="admin-card-head">
+                            <div>
+                              <h2>Customer support</h2>
+                              <p>Displayed on the Contact us page and order tracking.</p>
+                            </div>
+                            <Mail size={20} />
+                          </div>
+                          <div className="admin-fields">
+                            <label>
+                              Support email
                               <input
-                                value={config.logoText || ""}
+                                type="email"
+                                value={config.supportEmail}
                                 onChange={(e) => {
                                   setSettingsSaved(false);
-                                  setConfig({ ...config, logoText: e.target.value });
+                                  setConfig({
+                                    ...config,
+                                    supportEmail: e.target.value,
+                                  });
                                 }}
-                                placeholder="PAKISTAN"
-                                maxLength={80}
+                                placeholder="support@yourstore.pk"
+                                maxLength={100}
                               />
-                              <small>Shown under text logo when no image logo is uploaded (Default: PAKISTAN).</small>
+                            </label>
+                            <label>
+                              WhatsApp number
+                              <input
+                                value={config.whatsapp}
+                                onChange={(e) => {
+                                  setSettingsSaved(false);
+                                  setConfig({ ...config, whatsapp: e.target.value });
+                                }}
+                                pattern="(923[0-9]{9})?"
+                                placeholder="923001234567"
+                              />
+                              <small>
+                                Use 92 followed by the mobile number, without + or spaces (e.g. 923001234567).
+                              </small>
                             </label>
                           </div>
+                        </div>
 
-                          {/* Right Column: Active Logo Preview */}
-                          <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%" }}>
-                            <span style={{ fontSize: 12, fontWeight: 600, color: "#1e293b" }}>
-                              Active Store Logo Preview
-                            </span>
-                            <div style={{
-                              padding: 16,
-                              background: "#ffffff",
-                              border: "1px solid #e2e8f0",
-                              borderRadius: 10,
-                              flex: 1,
-                              display: "flex",
-                              flexDirection: "column",
-                              justifyContent: "space-between"
-                            }}>
+                        <div className="admin-setting-note">
+                          <ShieldCheck size={19} />
+                          <p>
+                            Store Currency: <b>PKR (Pakistani Rupee)</b> · Country: <b>Pakistan</b> · Timezone: <b>Asia/Karachi</b>
+                          </p>
+                        </div>
+                        {saveError && (
+                          <p className="admin-error" role="alert">
+                            {saveError}
+                          </p>
+                        )}
+                        <button className="admin-primary" disabled={busy}>
+                          {settingsSaved && !busy ? <CheckCircle2 size={17} /> : <Save size={17} />}
+                          {busy ? "Saving…" : settingsSaved ? "Saved" : "Save settings"}
+                        </button>
+                      </form>
+                    )}
+
+                    {/* 2. Store Setup Subtab */}
+                    {settingsSubTab === "store_setup" && (
+                      <form
+                        className="admin-settings"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          setSettingsSaved(false);
+                          if (await write({ action: "settings", settings: config })) {
+                            setData({ ...data, settings: config });
+                            setSettingsSaved(true);
+                            toast.success("Store delivery and setup settings saved");
+                          }
+                        }}
+                      >
+                        <div className="admin-card">
+                          <div className="admin-card-head">
+                            <div>
+                              <h2>Delivery & checkout</h2>
+                              <p>These rates appear in your storefront and customer checkout.</p>
+                            </div>
+                            <Truck size={20} />
+                          </div>
+                          <div className="admin-fields">
+                            <div className="admin-two">
+                              <label>
+                                Delivery charge (PKR)
+                                <input
+                                  type="number"
+                                  required
+                                  min="0"
+                                  max="100000"
+                                  value={config.deliveryCharge}
+                                  onChange={(e) => {
+                                    setSettingsSaved(false);
+                                    setConfig({
+                                      ...config,
+                                      deliveryCharge: Number(e.target.value),
+                                    });
+                                  }}
+                                />
+                              </label>
+                              <label>
+                                Free delivery from (PKR)
+                                <input
+                                  type="number"
+                                  required
+                                  min="0"
+                                  max="10000000"
+                                  value={config.freeThreshold}
+                                  onChange={(e) => {
+                                    setSettingsSaved(false);
+                                    setConfig({
+                                      ...config,
+                                      freeThreshold: Number(e.target.value),
+                                    });
+                                  }}
+                                />
+                              </label>
+                            </div>
+                            <div className="admin-setting-fixed">
                               <div>
-                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                                  <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.8px", color: "#64748b", fontWeight: 600 }}>
-                                    Live Header Display
-                                  </span>
-                                  <span style={{ fontSize: 11, color: "#64748b", background: "#f1f5f9", padding: "2px 8px", borderRadius: 4 }}>
-                                    {config.logo ? "Custom Image" : "Default Text"}
-                                  </span>
-                                </div>
-                                <div style={{ background: "#203664", padding: "20px 16px", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 90 }}>
-                                  {config.logo ? (
-                                    <img
-                                      src={config.logo}
-                                      alt="Active logo preview"
-                                      style={{ maxHeight: 42, maxWidth: 200, objectFit: "contain" }}
-                                      onError={(e) => (e.currentTarget.style.display = "none")}
-                                    />
-                                  ) : (
-                                    <a href="#" onClick={(e) => e.preventDefault()} style={{ color: "#ffffff", fontSize: 26, fontWeight: 700, textDecoration: "none", display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1 }}>
-                                      <span>zeliy<span style={{ color: "#b68b69" }}>.</span></span>
-                                      <small style={{ fontSize: 9, color: "#a6b4cc", letterSpacing: "2.5px", marginTop: 4 }}>{config.logoText || "PAKISTAN"}</small>
-                                    </a>
-                                  )}
-                                </div>
+                                <b>Cash on Delivery (COD)</b>
+                                <p>Doorstep cash collection enabled across 200+ cities in Pakistan via Trax, TCS, and Leopards Express.</p>
                               </div>
+                              <Badge status="Active" />
+                            </div>
+                          </div>
+                        </div>
 
-                              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                <span style={{ fontSize: 12, color: "#475569" }}>
-                                  {config.logo ? "Custom image logo active" : "Default text logo active"}
-                                </span>
-                                {config.logo && (
-                                  <button
-                                    type="button"
-                                    className="admin-secondary"
-                                    onClick={() => {
-                                      setSettingsSaved(false);
-                                      setConfig({ ...config, logo: "" });
-                                      toast.info("Logo removed");
-                                    }}
-                                    style={{ fontSize: 12, padding: "4px 10px" }}
-                                  >
-                                    Remove logo
-                                  </button>
-                                )}
-                              </div>
+                        <div className="admin-card">
+                          <div className="admin-card-head">
+                            <div>
+                              <h2>Shipping rules & fulfillment notes</h2>
+                              <p>Standard delivery guidelines for Pakistan courier network.</p>
+                            </div>
+                            <ShieldCheck size={20} />
+                          </div>
+                          <div className="admin-fields">
+                            <div style={{ background: "#f8fafc", padding: 14, borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 12.5, color: "#334155", lineHeight: 1.6 }}>
+                              <p style={{ margin: "0 0 8px" }}>📦 <b>Standard Pakistan Shipping SLA:</b> 2 to 4 working days for major cities (Karachi, Lahore, Islamabad, Rawalpindi, Faisalabad, Multan, Peshawar, Quetta, Gujranwala, Sialkot).</p>
+                              <p style={{ margin: "0 0 8px" }}>🚚 <b>Courier Integrations:</b> Airway bill generation with barcode slip printing (4"x6" Thermal & A4) supported directly from the Orders fulfillment workspace.</p>
+                              <p style={{ margin: 0 }}>💰 <b>Automatic Free Shipping:</b> Cartify automatically applies free delivery at checkout when the order subtotal reaches or exceeds <b>{money(config.freeThreshold)}</b>.</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {saveError && (
+                          <p className="admin-error" role="alert">
+                            {saveError}
+                          </p>
+                        )}
+                        <button className="admin-primary" disabled={busy}>
+                          {settingsSaved && !busy ? <CheckCircle2 size={17} /> : <Save size={17} />}
+                          {busy ? "Saving…" : settingsSaved ? "Saved" : "Save store setup"}
+                        </button>
+                      </form>
+                    )}
+
+                    {/* 3. Offers Subtab */}
+                    {settingsSubTab === "offers" && (
+                      <div className="admin-settings" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                        {/* Add New Offer Card */}
+                        <div className="admin-card">
+                          <div className="admin-card-head">
+                            <div>
+                              <h2>Create new offer / bundle deal</h2>
+                              <p>Set up automatic checkout discounts, bundle volume deals, and promotional campaigns.</p>
+                            </div>
+                            <Sparkles size={20} />
+                          </div>
+                          <div className="admin-fields">
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+                              <label>
+                                Offer title *
+                                <input
+                                  value={newOfferTitle}
+                                  onChange={(e) => setNewOfferTitle(e.target.value)}
+                                  placeholder="e.g. Bundle Saver: Buy Any 2 Products"
+                                />
+                              </label>
+                              <label>
+                                Tagline / Customer subtitle
+                                <input
+                                  value={newOfferTagline}
+                                  onChange={(e) => setNewOfferTagline(e.target.value)}
+                                  placeholder="e.g. Save 10% automatically at checkout"
+                                />
+                              </label>
+                              <label>
+                                Discount type
+                                <select
+                                  value={newOfferType}
+                                  onChange={(e: any) => setNewOfferType(e.target.value)}
+                                  style={{ width: "100%", height: 38, border: "1px solid #cbd5e1", borderRadius: 6, padding: "0 10px" }}
+                                >
+                                  <option value="percentage">Percentage Discount (% Off)</option>
+                                  <option value="fixed">Fixed Cash Discount (Rs. Off)</option>
+                                  <option value="bundle">Bundle Tier Deal</option>
+                                </select>
+                              </label>
+                              <label>
+                                Discount value ({newOfferType === "percentage" ? "%" : "PKR"}) *
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={newOfferValue}
+                                  onChange={(e) => setNewOfferValue(e.target.value)}
+                                />
+                              </label>
+                              <label>
+                                Minimum quantity required
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={newOfferMinQty}
+                                  onChange={(e) => setNewOfferMinQty(e.target.value)}
+                                />
+                              </label>
+                              <label>
+                                Promotional badge text
+                                <input
+                                  value={newOfferBadge}
+                                  onChange={(e) => setNewOfferBadge(e.target.value)}
+                                  placeholder="e.g. POPULAR, BEST VALUE, EID SPECIAL"
+                                />
+                              </label>
+                            </div>
+
+                            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                              <button
+                                type="button"
+                                className="admin-primary"
+                                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                                disabled={!newOfferTitle.trim() || !newOfferValue || busy}
+                                onClick={async () => {
+                                  const newOffer: any = {
+                                    id: `off-${Date.now()}`,
+                                    title: newOfferTitle.trim(),
+                                    tagline: newOfferTagline.trim() || `${newOfferValue}${newOfferType === "percentage" ? "%" : " PKR"} automatic discount`,
+                                    discountType: newOfferType,
+                                    discountValue: Number(newOfferValue) || 10,
+                                    minQuantity: Number(newOfferMinQty) || 2,
+                                    badgeText: newOfferBadge.trim() || "SPECIAL OFFER",
+                                    enabled: true,
+                                  };
+                                  const updatedOffers = [newOffer, ...(config.offers || [])];
+                                  const updated = { ...config, offers: updatedOffers };
+                                  setConfig(updated);
+                                  setSettingsSaved(false);
+                                  const ok = await write({ action: "settings", settings: updated });
+                                  if (ok) {
+                                    setData({ ...data, settings: updated });
+                                    setSettingsSaved(true);
+                                    setNewOfferTitle("");
+                                    setNewOfferTagline("");
+                                    setNewOfferValue("10");
+                                    setNewOfferMinQty("2");
+                                    toast.success(`Offer "${newOffer.title}" created successfully!`);
+                                  }
+                                }}
+                              >
+                                <Plus size={16} /> Add Offer
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Existing Offers List */}
+                        <div className="admin-card">
+                          <div className="admin-card-head">
+                            <div>
+                              <h2>Active store offers & bundle deals ({(config.offers || []).length})</h2>
+                              <p>Deals currently enabled for automatic calculation in the storefront cart and checkout.</p>
                             </div>
                           </div>
 
-                        </div>
-                      </div>
-                    </div>
-                    <div className="admin-card">
-                      <div className="admin-card-head">
-                        <div>
-                          <h2>Delivery & checkout</h2>
-                          <p>
-                            These rates appear in your storefront and checkout.
-                          </p>
-                        </div>
-                        <Truck size={20} />
-                      </div>
-                      <div className="admin-fields">
-                        <div className="admin-two">
-                          <label>
-                            Delivery charge (PKR)
-                            <input
-                              type="number"
-                              required
-                              min="0"
-                              max="100000"
-                              value={config.deliveryCharge}
-                              onChange={(e) => {
-                                setSettingsSaved(false);
-                                setConfig({
-                                  ...config,
-                                  deliveryCharge: Number(e.target.value),
-                                });
-                              }}
-                            />
-                          </label>
-                          <label>
-                            Free delivery from (PKR)
-                            <input
-                              type="number"
-                              required
-                              min="0"
-                              max="10000000"
-                              value={config.freeThreshold}
-                              onChange={(e) => {
-                                setSettingsSaved(false);
-                                setConfig({
-                                  ...config,
-                                  freeThreshold: Number(e.target.value),
-                                });
-                              }}
-                            />
-                          </label>
-                        </div>
-                        <div className="admin-setting-fixed">
-                          <div>
-                            <b>Cash on delivery</b>
-                            <p>Enabled for checkout</p>
+                          <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+                            {(config.offers || []).length === 0 ? (
+                              <div className="admin-empty" style={{ padding: "30px 20px" }}>
+                                <Sparkles size={32} style={{ color: "#94a3b8" }} />
+                                <h3>No offers created yet</h3>
+                                <p>Add your first bundle deal or automatic checkout discount using the form above.</p>
+                              </div>
+                            ) : (
+                              (config.offers || []).map((offer, idx) => (
+                                <div
+                                  key={offer.id || idx}
+                                  style={{
+                                    display: "flex",
+                                    flexWrap: "wrap",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    gap: 14,
+                                    padding: "14px 18px",
+                                    borderRadius: 10,
+                                    border: offer.enabled ? "1px solid #c7d2fe" : "1px solid #e2e8f0",
+                                    background: offer.enabled ? "#f5f3ff" : "#f8fafc",
+                                    transition: "all 0.15s ease",
+                                  }}
+                                >
+                                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                    <div
+                                      style={{
+                                        width: 38,
+                                        height: 38,
+                                        borderRadius: 8,
+                                        background: offer.enabled ? "#6351f4" : "#94a3b8",
+                                        color: "#ffffff",
+                                        display: "grid",
+                                        placeItems: "center",
+                                        fontWeight: 800,
+                                        fontSize: 14,
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      {offer.discountType === "percentage" ? `${offer.discountValue}%` : `Rs.`}
+                                    </div>
+                                    <div>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                        <b style={{ fontSize: 13.5, color: "#1e293b" }}>{offer.title}</b>
+                                        {offer.badgeText && (
+                                          <span style={{ fontSize: 10, fontWeight: 700, background: "#ede9fe", color: "#6d28d9", padding: "1px 7px", borderRadius: 999 }}>
+                                            {offer.badgeText}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "#64748b" }}>
+                                        {offer.tagline} · <b style={{ color: "#475569" }}>Min items: {offer.minQuantity || 1}</b>
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={async () => {
+                                        const updatedOffers = (config.offers || []).map((o) =>
+                                          o.id === offer.id ? { ...o, enabled: !o.enabled } : o
+                                        );
+                                        const updated = { ...config, offers: updatedOffers };
+                                        setConfig(updated);
+                                        const ok = await write({ action: "settings", settings: updated });
+                                        if (ok) {
+                                          setData({ ...data, settings: updated });
+                                          toast.success(`Offer ${offer.enabled ? "disabled" : "enabled"}`);
+                                        }
+                                      }}
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: 6,
+                                        padding: "4px 10px",
+                                        borderRadius: 999,
+                                        fontSize: 11.5,
+                                        fontWeight: 600,
+                                        cursor: "pointer",
+                                        border: offer.enabled ? "1px solid #86efac" : "1px solid #cbd5e1",
+                                        background: offer.enabled ? "#f0fdf4" : "#f8fafc",
+                                        color: offer.enabled ? "#15803d" : "#64748b",
+                                      }}
+                                    >
+                                      <span
+                                        style={{
+                                          width: 8,
+                                          height: 8,
+                                          borderRadius: "50%",
+                                          background: offer.enabled ? "#16a34a" : "#94a3b8",
+                                        }}
+                                      />
+                                      {offer.enabled ? "Active" : "Disabled"}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={async () => {
+                                        if (window.confirm(`Delete offer "${offer.title}"?`)) {
+                                          const updatedOffers = (config.offers || []).filter((o) => o.id !== offer.id);
+                                          const updated = { ...config, offers: updatedOffers };
+                                          setConfig(updated);
+                                          const ok = await write({ action: "settings", settings: updated });
+                                          if (ok) {
+                                            setData({ ...data, settings: updated });
+                                            toast.success("Offer deleted");
+                                          }
+                                        }
+                                      }}
+                                      style={{
+                                        border: "1px solid #fecaca",
+                                        background: "#fff5f5",
+                                        color: "#dc2626",
+                                        borderRadius: 6,
+                                        padding: "5px 8px",
+                                        cursor: "pointer",
+                                        display: "grid",
+                                        placeItems: "center",
+                                      }}
+                                      title="Delete offer"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                            )}
                           </div>
-                          <Badge status="Active" />
                         </div>
                       </div>
-                    </div>
-                    <div className="admin-card">
-                      <div className="admin-card-head">
-                        <div>
-                          <h2>Customer support</h2>
-                          <p>Displayed on the Contact us page when saved.</p>
-                        </div>
-                        <Mail size={20} />
-                      </div>
-                      <div className="admin-fields">
-                        <label>
-                          Support email
-                          <input
-                            type="email"
-                            value={config.supportEmail}
-                            onChange={(e) => {
-                              setSettingsSaved(false);
-                              setConfig({
-                                ...config,
-                                supportEmail: e.target.value,
-                              });
-                            }}
-                            placeholder="support@yourstore.pk"
-                            maxLength={100}
-                          />
-                        </label>
-                        <label>
-                          WhatsApp number
-                          <input
-                            value={config.whatsapp}
-                            onChange={(e) => {
-                              setSettingsSaved(false);
-                              setConfig({ ...config, whatsapp: e.target.value });
-                            }}
-                            pattern="(923[0-9]{9})?"
-                            placeholder="923001234567"
-                          />
-                          <small>
-                            Use 92 followed by the mobile number, without + or
-                            spaces.
-                          </small>
-                        </label>
-                      </div>
-                    </div>
-                    <div className="admin-setting-note">
-                      <ShieldCheck size={19} />
-                      <p>
-                        Your store remains in preview mode. Payment providers
-                        and couriers are not connected.
-                      </p>
-                    </div>
-                    {saveError && (
-                      <p className="admin-error" role="alert">
-                        {saveError}
-                      </p>
                     )}
-                    <button className="admin-primary" disabled={busy}>
-                      {settingsSaved && !busy ? <CheckCircle2 size={17} /> : <Save size={17} />}
-                      {busy ? "Saving…" : settingsSaved ? "Saved" : "Save settings"}
-                    </button>
-                  </form>
+
+                    {/* 4. Coupons Subtab */}
+                    {settingsSubTab === "coupons" && (
+                      <div className="admin-settings" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                        {/* Create Coupon Card */}
+                        <div className="admin-card">
+                          <div className="admin-card-head">
+                            <div>
+                              <h2>Create new coupon code</h2>
+                              <p>Add voucher discount codes for checkout with custom spend limits and expiry dates.</p>
+                            </div>
+                            <Tags size={20} />
+                          </div>
+                          <div className="admin-fields">
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+                              <label>
+                                Coupon code *
+                                <input
+                                  value={newCouponCode}
+                                  onChange={(e) => setNewCouponCode(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ""))}
+                                  placeholder="e.g. WELCOME10, EID2026"
+                                  style={{ textTransform: "uppercase", fontWeight: 700, letterSpacing: "1px" }}
+                                />
+                              </label>
+                              <label>
+                                Discount type
+                                <select
+                                  value={newCouponType}
+                                  onChange={(e: any) => setNewCouponType(e.target.value)}
+                                  style={{ width: "100%", height: 38, border: "1px solid #cbd5e1", borderRadius: 6, padding: "0 10px" }}
+                                >
+                                  <option value="percentage">Percentage (% Off)</option>
+                                  <option value="fixed">Fixed Cash Amount (PKR Off)</option>
+                                </select>
+                              </label>
+                              <label>
+                                Discount value ({newCouponType === "percentage" ? "%" : "PKR"}) *
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={newCouponValue}
+                                  onChange={(e) => setNewCouponValue(e.target.value)}
+                                />
+                              </label>
+                              <label>
+                                Minimum spend required (PKR)
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={newCouponMinSpend}
+                                  onChange={(e) => setNewCouponMinSpend(e.target.value)}
+                                  placeholder="e.g. 1500"
+                                />
+                              </label>
+                              <label>
+                                Expiry date (Optional)
+                                <input
+                                  type="date"
+                                  value={newCouponExpiry}
+                                  onChange={(e) => setNewCouponExpiry(e.target.value)}
+                                />
+                              </label>
+                            </div>
+
+                            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                              <button
+                                type="button"
+                                className="admin-primary"
+                                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                                disabled={!newCouponCode.trim() || !newCouponValue || busy}
+                                onClick={async () => {
+                                  const code = newCouponCode.trim().toUpperCase();
+                                  if ((config.coupons || []).some((c) => c.code === code)) {
+                                    toast.error(`Coupon code "${code}" already exists.`);
+                                    return;
+                                  }
+                                  const newCoupon: any = {
+                                    id: `c-${Date.now()}`,
+                                    code,
+                                    type: newCouponType,
+                                    value: Number(newCouponValue) || 10,
+                                    minSpend: Number(newCouponMinSpend) || 0,
+                                    status: "Active",
+                                    usageCount: 0,
+                                    expiryDate: newCouponExpiry || undefined,
+                                  };
+                                  const updatedCoupons = [newCoupon, ...(config.coupons || [])];
+                                  const updated = { ...config, coupons: updatedCoupons };
+                                  setConfig(updated);
+                                  setSettingsSaved(false);
+                                  const ok = await write({ action: "settings", settings: updated });
+                                  if (ok) {
+                                    setData({ ...data, settings: updated });
+                                    setSettingsSaved(true);
+                                    setNewCouponCode("");
+                                    setNewCouponValue("10");
+                                    setNewCouponExpiry("");
+                                    toast.success(`Coupon "${code}" created successfully!`);
+                                  }
+                                }}
+                              >
+                                <Plus size={16} /> Create Coupon
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Coupons Table */}
+                        <div className="admin-card">
+                          <div className="admin-card-head">
+                            <div>
+                              <h2>Active discount coupons ({(config.coupons || []).length})</h2>
+                              <p>Manage customer promo vouchers and usage records.</p>
+                            </div>
+                          </div>
+
+                          {(config.coupons || []).length === 0 ? (
+                            <div className="admin-empty" style={{ padding: "30px 20px" }}>
+                              <Tags size={32} style={{ color: "#94a3b8" }} />
+                              <h3>No discount coupons created yet</h3>
+                              <p>Create promotional vouchers using the form above.</p>
+                            </div>
+                          ) : (
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Coupon Code</TableHead>
+                                  <TableHead>Discount Value</TableHead>
+                                  <TableHead>Min Spend</TableHead>
+                                  <TableHead>Uses</TableHead>
+                                  <TableHead>Expiry</TableHead>
+                                  <TableHead>Status</TableHead>
+                                  <TableHead style={{ textAlign: "right" }}>Actions</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {(config.coupons || []).map((cpn) => (
+                                  <TableRow key={cpn.id || cpn.code}>
+                                    <TableCell>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                        <code style={{ background: "#ede9fe", color: "#5b21b6", padding: "2px 8px", borderRadius: 6, fontWeight: 800, fontSize: 13, letterSpacing: "0.5px" }}>
+                                          {cpn.code}
+                                        </code>
+                                        <button
+                                          type="button"
+                                          title="Copy coupon code"
+                                          onClick={() => {
+                                            navigator.clipboard?.writeText(cpn.code);
+                                            toast.info(`Copied "${cpn.code}" to clipboard`);
+                                          }}
+                                          style={{ border: 0, background: "none", cursor: "pointer", padding: 2, color: "#94a3b8" }}
+                                        >
+                                          <Copy size={12} />
+                                        </button>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell>
+                                      <b>{cpn.type === "percentage" ? `${cpn.value}% Off` : money(cpn.value) + " Off"}</b>
+                                    </TableCell>
+                                    <TableCell>{cpn.minSpend ? money(cpn.minSpend) : "No minimum"}</TableCell>
+                                    <TableCell>
+                                      <span style={{ fontWeight: 600, color: "#475569" }}>{cpn.usageCount || 0} times</span>
+                                    </TableCell>
+                                    <TableCell>
+                                      {cpn.expiryDate ? new Date(cpn.expiryDate).toLocaleDateString("en-PK") : <span style={{ color: "#94a3b8" }}>Never</span>}
+                                    </TableCell>
+                                    <TableCell>
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={async () => {
+                                          const nextStatus = cpn.status === "Active" ? "Inactive" : "Active";
+                                          const updatedCoupons = (config.coupons || []).map((c) =>
+                                            c.id === cpn.id ? { ...c, status: nextStatus as any } : c
+                                          );
+                                          const updated = { ...config, coupons: updatedCoupons };
+                                          setConfig(updated);
+                                          const ok = await write({ action: "settings", settings: updated });
+                                          if (ok) {
+                                            setData({ ...data, settings: updated });
+                                            toast.success(`Coupon ${cpn.code} set to ${nextStatus}`);
+                                          }
+                                        }}
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 6,
+                                          padding: "3px 8px",
+                                          borderRadius: 999,
+                                          fontSize: 11,
+                                          fontWeight: 600,
+                                          cursor: "pointer",
+                                          border: cpn.status === "Active" ? "1px solid #86efac" : "1px solid #cbd5e1",
+                                          background: cpn.status === "Active" ? "#f0fdf4" : "#f8fafc",
+                                          color: cpn.status === "Active" ? "#15803d" : "#64748b",
+                                        }}
+                                      >
+                                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: cpn.status === "Active" ? "#16a34a" : "#94a3b8" }} />
+                                        {cpn.status}
+                                      </button>
+                                    </TableCell>
+                                    <TableCell style={{ textAlign: "right" }}>
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={async () => {
+                                          if (window.confirm(`Delete coupon "${cpn.code}"?`)) {
+                                            const updatedCoupons = (config.coupons || []).filter((c) => c.id !== cpn.id);
+                                            const updated = { ...config, coupons: updatedCoupons };
+                                            setConfig(updated);
+                                            const ok = await write({ action: "settings", settings: updated });
+                                            if (ok) {
+                                              setData({ ...data, settings: updated });
+                                              toast.success(`Coupon "${cpn.code}" deleted`);
+                                            }
+                                          }
+                                        }}
+                                        style={{
+                                          border: "1px solid #fecaca",
+                                          background: "#fff5f5",
+                                          color: "#dc2626",
+                                          borderRadius: 6,
+                                          padding: "4px 8px",
+                                          cursor: "pointer",
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          gap: 4,
+                                          fontSize: 11,
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        <Trash2 size={12} /> Delete
+                                      </button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 5. Information Pages Subtab */}
+                    {settingsSubTab === "info_pages" && (() => {
+                      const pagesList = config.infoPages && config.infoPages.length > 0
+                        ? config.infoPages
+                        : [
+                            { id: "about", title: "About Cartify Pakistan", slug: "about-us", content: "Cartify is Pakistan's premier destination for curated fashion, footwear, bags, and everyday essentials with guaranteed Cash on Delivery across 200+ cities.", enabled: true },
+                            { id: "shipping", title: "Shipping & Delivery Policy", slug: "shipping-policy", content: "We ship all orders across Pakistan via Trax Logistics, TCS, and Leopards Express. Standard delivery takes 2-4 working days. Cash on delivery is accepted nationwide.", enabled: true },
+                            { id: "returns", title: "7-Day Easy Returns & Exchange", slug: "return-policy", content: "If you receive a damaged or incorrect item, or if the size doesn't fit, you can request an exchange or return within 7 days of delivery by contacting customer support on WhatsApp.", enabled: true },
+                            { id: "privacy", title: "Privacy Policy", slug: "privacy-policy", content: "Your personal details, contact numbers, and delivery address are strictly confidential and only used for order dispatch, verification calls, and courier tracking updates.", enabled: true },
+                            { id: "terms", title: "Terms & Conditions", slug: "terms", content: "By placing an order on Cartify Pakistan, you agree to inspect packages upon arrival and provide accurate shipping address details for Cash on Delivery dispatch.", enabled: true },
+                          ];
+                      const activePage = pagesList.find((p) => p.id === selectedInfoPageId) || pagesList[0];
+
+                      return (
+                        <div className="admin-settings" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                          <div className="admin-card">
+                            <div className="admin-card-head">
+                              <div>
+                                <h2>Information & policy pages</h2>
+                                <p>Edit customer service policies, About Us, Shipping policy, Return & Refund policy, and Terms.</p>
+                              </div>
+                              <FileText size={20} />
+                            </div>
+
+                            {/* Page Select Pills */}
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "14px 20px", borderBottom: "1px solid #e2e8f0", background: "#f8fafc" }}>
+                              {pagesList.map((page) => (
+                                <button
+                                  key={page.id}
+                                  type="button"
+                                  onClick={() => setSelectedInfoPageId(page.id)}
+                                  style={{
+                                    padding: "7px 14px",
+                                    borderRadius: 8,
+                                    fontSize: 12.5,
+                                    fontWeight: selectedInfoPageId === page.id ? 700 : 500,
+                                    background: selectedInfoPageId === page.id ? "#6351f4" : "#ffffff",
+                                    color: selectedInfoPageId === page.id ? "#ffffff" : "#475569",
+                                    border: selectedInfoPageId === page.id ? "1px solid #6351f4" : "1px solid #cbd5e1",
+                                    cursor: "pointer",
+                                    transition: "all 0.15s ease",
+                                  }}
+                                >
+                                  {page.title}
+                                </button>
+                              ))}
+                            </div>
+
+                            <form
+                              className="admin-fields"
+                              onSubmit={async (e) => {
+                                e.preventDefault();
+                                setSettingsSaved(false);
+                                const updated = { ...config, infoPages: pagesList };
+                                const ok = await write({ action: "settings", settings: updated });
+                                if (ok) {
+                                  setData({ ...data, settings: updated });
+                                  setSettingsSaved(true);
+                                  toast.success(`Page "${activePage.title}" saved successfully!`);
+                                }
+                              }}
+                            >
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                                <label>
+                                  Page title
+                                  <input
+                                    value={activePage.title}
+                                    onChange={(e) => {
+                                      const updatedPages = pagesList.map((p) =>
+                                        p.id === activePage.id ? { ...p, title: e.target.value } : p
+                                      );
+                                      setConfig({ ...config, infoPages: updatedPages });
+                                    }}
+                                  />
+                                </label>
+                                <label>
+                                  URL Slug
+                                  <input
+                                    value={activePage.slug}
+                                    onChange={(e) => {
+                                      const updatedPages = pagesList.map((p) =>
+                                        p.id === activePage.id ? { ...p, slug: e.target.value } : p
+                                      );
+                                      setConfig({ ...config, infoPages: updatedPages });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+
+                              <label style={{ marginTop: 12 }}>
+                                Policy / page content
+                                <textarea
+                                  rows={8}
+                                  value={activePage.content}
+                                  onChange={(e) => {
+                                    const updatedPages = pagesList.map((p) =>
+                                      p.id === activePage.id ? { ...p, content: e.target.value } : p
+                                    );
+                                    setConfig({ ...config, infoPages: updatedPages });
+                                  }}
+                                  style={{ width: "100%", padding: "10px 12px", fontSize: 13, lineHeight: 1.6, border: "1px solid #cbd5e1", borderRadius: 8 }}
+                                />
+                              </label>
+
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, paddingTop: 14, borderTop: "1px solid #f1f5f9" }}>
+                                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", margin: 0 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={activePage.enabled}
+                                    onChange={(e) => {
+                                      const updatedPages = pagesList.map((p) =>
+                                        p.id === activePage.id ? { ...p, enabled: e.target.checked } : p
+                                      );
+                                      setConfig({ ...config, infoPages: updatedPages });
+                                    }}
+                                    style={{ width: 16, height: 16, accentColor: "#6351f4" }}
+                                  />
+                                  <span style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Publish page on storefront footer links</span>
+                                </label>
+
+                                <button type="submit" className="admin-primary" disabled={busy}>
+                                  {settingsSaved && !busy ? <CheckCircle2 size={17} /> : <Save size={17} />}
+                                  {busy ? "Saving…" : "Save Information Page"}
+                                </button>
+                              </div>
+                            </form>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* 6. Theme Setting / Banners Subtab */}
+                    {settingsSubTab === "theme_setting" && (
+                      <BannersManager
+                        config={config}
+                        onSave={async (updated) => {
+                          setConfig(updated);
+                          setSettingsSaved(false);
+                          const ok = await write({ action: "settings", settings: updated });
+                          if (ok) {
+                            setSettingsSaved(true);
+                            toast.success("Banner carousel & theme settings saved");
+                          }
+                          return ok;
+                        }}
+                      />
+                    )}
+
+                    {/* 7. Category Settings Subtab */}
+                    {settingsSubTab === "categories" && (
+                      <Categories
+                        onChange={(categories) =>
+                          setData((current) => (current ? { ...current, categories } : current))
+                        }
+                      />
+                    )}
+                  </>
                 )}
               </>
             )
           )}
           <div className="admin-bottom">
-            <span>Zeliy Pakistan · Store management</span>
+            <span>Cartify Pakistan · Store management</span>
             <span>All amounts in PKR</span>
           </div>
         </div>
@@ -4572,29 +6204,908 @@ export default function Admin() {
         );
       })()}
       {stockEditing && (() => {
+        const hasEmbeddedVariants = Boolean(stockEditing.variants && stockEditing.variants.length > 0);
+
+        // Extract strictly only the sizes that were actually configured for THIS product listing
+        const productAllSizes: string[] = [];
+        if ((stockEditing as any).variantOptions && Array.isArray((stockEditing as any).variantOptions)) {
+          const sizeOpt = (stockEditing as any).variantOptions.find((o: any) => o.name.toLowerCase() === "size");
+          if (sizeOpt && Array.isArray(sizeOpt.values) && sizeOpt.values.length > 0) {
+            for (const s of sizeOpt.values) {
+              if (s && s !== "Standard" && !productAllSizes.includes(s)) {
+                productAllSizes.push(s);
+              }
+            }
+          }
+        }
+        if (productAllSizes.length === 0 && stockEditing.sizes && stockEditing.sizes.length > 0) {
+          for (const s of stockEditing.sizes) {
+            if (s && s !== "Standard" && !productAllSizes.includes(s)) {
+              productAllSizes.push(s);
+            }
+          }
+        }
+        if (productAllSizes.length === 0 && hasEmbeddedVariants) {
+          for (const v of stockEditing.variants || []) {
+            if (v.size && v.size !== "Standard" && !productAllSizes.includes(v.size)) {
+              productAllSizes.push(v.size);
+            }
+          }
+        }
+        if (productAllSizes.length === 0 && stockEditing.sizeStock && Object.keys(stockEditing.sizeStock).length > 0) {
+          for (const s of Object.keys(stockEditing.sizeStock)) {
+            if (s && s !== "Standard" && !productAllSizes.includes(s)) {
+              productAllSizes.push(s);
+            }
+          }
+        }
+        
+        let colorVariantItems: Array<{
+          color: string;
+          colorHex?: string;
+          sku?: string;
+          image?: string;
+          stock: number;
+          sizes: string[];
+          sizeStock: Record<string, number>;
+        }> = [];
+
+        if (hasEmbeddedVariants) {
+          const colorMap = new Map<string, { color: string; colorHex?: string; sku?: string; image?: string; stock: number; sizes: string[]; sizeStock: Record<string, number> }>();
+          for (const v of stockEditing.variants || []) {
+            if (!v.color || v.color === "Not applicable") continue;
+            const existing = colorMap.get(v.color);
+            if (!existing) {
+              const sizeStock: Record<string, number> = {};
+              const sizes: string[] = [];
+              if (v.size && v.size !== "Standard") {
+                sizes.push(v.size);
+                sizeStock[v.size] = Number(v.stock || 0);
+              }
+              colorMap.set(v.color, {
+                color: v.color,
+                colorHex: v.colorHex,
+                sku: v.sku || `${stockEditing.sku || stockEditing.id}-${slug(v.color).toUpperCase()}`,
+                image: v.images?.[0] || v.image || stockEditing.image,
+                stock: Number(v.stock || 0),
+                sizes,
+                sizeStock,
+              });
+            } else {
+              existing.stock += Number(v.stock || 0);
+              if (v.size && v.size !== "Standard" && !existing.sizes.includes(v.size)) {
+                existing.sizes.push(v.size);
+              }
+              if (v.size && v.size !== "Standard") {
+                existing.sizeStock[v.size] = Number(v.stock || 0);
+              }
+            }
+          }
+
+          // Duplicate productAllSizes across ALL color variants so every color has all sizes
+          for (const item of colorMap.values()) {
+            if (productAllSizes.length > 0) {
+              for (const sz of productAllSizes) {
+                if (!item.sizes.includes(sz)) {
+                  item.sizes.push(sz);
+                }
+                if (item.sizeStock[sz] === undefined) {
+                  item.sizeStock[sz] = 0;
+                }
+              }
+              item.sizes.sort((a, b) => {
+                const idxA = productAllSizes.indexOf(a);
+                const idxB = productAllSizes.indexOf(b);
+                if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                return 0;
+              });
+            }
+          }
+
+          colorVariantItems = Array.from(colorMap.values());
+        }
+
         const stockVariants = variantsFor(stockEditing);
         const group = stockEditing.listingGroup || stockEditing.id;
-        const hasChildColors = stockVariants.some((item) => item.id !== group && item.color && item.color.toLowerCase() !== "not applicable");
-        const visibleStockVariants = hasChildColors
+        const hasChildProducts = !hasEmbeddedVariants && stockVariants.some((item) => item.id !== group && item.color && item.color.toLowerCase() !== "not applicable");
+        const visibleStockVariants = hasChildProducts
           ? stockVariants.filter((item) => item.id !== group && item.color && item.color.toLowerCase() !== "not applicable")
           : stockVariants;
-        const availableStockColors = colors.filter((color) => color !== "Not applicable" && !stockVariants.some((item) => item.color === color));
-        return <Dialog open onOpenChange={(open)=>{if(!open&&!busy)setStockEditing(null)}}><DialogContent className="admin-dialog stock-dialog"><DialogHeader><DialogTitle>Add stock</DialogTitle><DialogDescription>{hasChildColors ? "Set stock for each colour variant." : "Set stock for the product."}</DialogDescription></DialogHeader><form className="admin-fields" onSubmit={async e=>{e.preventDefault();const updates=stockVariants.map((item)=>{const rawStock=Number(stockValues[item.id] ?? (item as any).stock ?? 0);return {item,stock:rawStock};});if(updates.some(({stock})=>!Number.isFinite(stock)||stock<0))return;let ok=true;const parent=stockEditing.listingGroup?{...stockEditing,listingGroup:group}:stockEditing;if(!stockEditing.listingGroup)ok=await write({action:'product',product:{...parent,stock:Number(stockValues[stockEditing.id] ?? (stockEditing as any).stock ?? 0),status:"Active" as const}});for(const {item,stock} of updates){if(!ok)break;const sizeEntries=sizeOptionsFor(item).map((size)=>[size,stockValues[item.id+":"+size]]).filter(([,value])=>value!==""&&value!=null);const sizeStock=Object.fromEntries(sizeEntries.map(([size,value])=>[size,Number(value)]));if(Object.values(sizeStock).some((value)=>!Number.isFinite(value)||value<0))return;const sumSizeStock=Object.values(sizeStock).reduce((acc,val)=>acc+(Number(val)||0),0);const finalStock=sizeEntries.length>0?sumSizeStock:stock;ok=await write({action:'product',product:{...item,stock:finalStock,sizeStock,listingGroup:item.listingGroup||group,status:finalStock>0?"Active" as const:item.status}});}if(ok&&stockColorChoice){const stock=Number(stockValue);if(!Number.isFinite(stock)||stock<0)return;const baseId=`${group}-${slug(stockColorChoice)}`;const id=products.some((item)=>item.id===baseId)?`${baseId}-${Date.now()}`:baseId;const child={...stockEditing,id,name:`${stockEditing.name.replace(/\s+·\s+.+$/,"")} · ${stockColorChoice}`,sku:stockEditing.sku?`${stockEditing.sku}-${slug(stockColorChoice).toUpperCase()}`:id,color:stockColorChoice,option:stockEditing.option||"Standard",listingGroup:group,status:stock>0?"Active" as const:"Draft" as const,stock};ok=await write({action:'product',product:child});}if(ok){await load();setStockEditing(null);setStockColorChoice("");setStockValue("");setStockValues({});toast.success('Stock updated')}}}>
-          <div className="stock-colour-list">
-            {visibleStockVariants.map((variant) => (
-              <label key={variant.id} className="stock-colour-row">
-                <span><img src={photo(variant)} alt={variant.color || variant.name}/><b>{variant.color || variant.name}</b></span>
-                <input type="number" min="0" step="1" required value={stockValues[variant.id] ?? String((variant as any).stock ?? 0)} onChange={(event)=>setStockValues((current)=>({...current,[variant.id]:event.target.value}))} placeholder="0"/>
-                {sizeOptionsFor(variant).length > 1 && <div className="stock-size-grid">{sizeOptionsFor(variant).map((size)=><label key={size}>{size}<input type="number" min="0" step="1" value={stockValues[variant.id+":"+size] ?? ""} onChange={(event)=>setStockValues((current)=>({...current,[variant.id+":"+size]:event.target.value}))} placeholder="Use total"/></label>)}</div>}
-              </label>
-            ))}
-          </div>
-          <div className="stock-add-colour">
-            <label>Add another colour<select value={stockColorChoice} onChange={(event)=>setStockColorChoice(event.target.value)}><option value="">--select color--</option>{availableStockColors.map((color)=><option key={color} value={color}>{color}</option>)}</select></label>
-            {stockColorChoice && <label>{stockColorChoice} stock<input type="number" min="0" step="1" required value={stockValue} onChange={e=>setStockValue(e.target.value)} placeholder="0"/></label>}
-          </div>
-          <button className="admin-primary" disabled={busy}>{busy?'Saving…':'Save stock'}</button>
-        </form></DialogContent></Dialog>;
+
+        const existingColorNames = hasEmbeddedVariants
+          ? colorVariantItems.map((c) => c.color.toLowerCase())
+          : stockVariants.map((v) => (v.color || "").toLowerCase());
+        const availableStockColors = colors.filter((color) => color !== "Not applicable" && !existingColorNames.includes(color.toLowerCase()));
+
+        // Calculate live overall stock from inputs
+        let liveOverallStock = 0;
+        if (hasEmbeddedVariants) {
+          liveOverallStock = colorVariantItems.reduce((acc, c) => {
+            if (c.sizes.length > 0) {
+              const sum = c.sizes.reduce((sAcc, sz) => {
+                const raw = stockValues[`color:${c.color}:size:${sz}`] ?? String(c.sizeStock[sz] ?? 0);
+                const val = Number(raw);
+                return sAcc + (Number.isFinite(val) && val >= 0 ? val : 0);
+              }, 0);
+              return acc + sum;
+            }
+            const val = Number(stockValues[`color:${c.color}`] ?? c.stock);
+            return acc + (Number.isFinite(val) && val >= 0 ? val : 0);
+          }, 0);
+          if (stockColorChoice) {
+            if (productAllSizes.length > 0) {
+              const newSum = productAllSizes.reduce((sAcc, sz) => {
+                const raw = stockValues[`new_color:${stockColorChoice}:size:${sz}`] ?? stockValue ?? "0";
+                const val = Number(raw);
+                return sAcc + (Number.isFinite(val) && val >= 0 ? val : 0);
+              }, 0);
+              liveOverallStock += newSum;
+            } else if (Number(stockValue) > 0) {
+              liveOverallStock += Number(stockValue);
+            }
+          }
+        } else if (hasChildProducts) {
+          const effectiveSizes = productAllSizes.length > 0 ? productAllSizes : (visibleStockVariants[0] ? sizeOptionsFor(visibleStockVariants[0]) : []);
+          liveOverallStock = visibleStockVariants.reduce((acc, v) => {
+            if (effectiveSizes.length > 0) {
+              const sum = (effectiveSizes as string[]).reduce((sAcc: number, sz: string) => {
+                const raw = stockValues[v.id + ":" + sz] ?? String(((v as any).sizeStock || {})[sz] ?? 0);
+                const val = Number(raw);
+                return sAcc + (Number.isFinite(val) && val >= 0 ? val : 0);
+              }, 0);
+              return acc + sum;
+            }
+            const val = Number(stockValues[v.id] ?? (v as any).stock ?? 0);
+            return acc + (Number.isFinite(val) && val >= 0 ? val : 0);
+          }, 0);
+          if (stockColorChoice) {
+            if (productAllSizes.length > 0) {
+              const newSum = productAllSizes.reduce((sAcc, sz) => {
+                const raw = stockValues[`new_child:${stockColorChoice}:size:${sz}`] ?? stockValue ?? "0";
+                const val = Number(raw);
+                return sAcc + (Number.isFinite(val) && val >= 0 ? val : 0);
+              }, 0);
+              liveOverallStock += newSum;
+            } else if (Number(stockValue) > 0) {
+              liveOverallStock += Number(stockValue);
+            }
+          }
+        } else {
+          const val = Number(stockValues[stockEditing.id] ?? (stockEditing as any).stock ?? 0);
+          liveOverallStock = Number.isFinite(val) && val >= 0 ? val : 0;
+          if (stockColorChoice && Number(stockValue) > 0) {
+            liveOverallStock += Number(stockValue);
+          }
+        }
+
+        return (
+          <Dialog
+            open
+            onOpenChange={(open) => {
+              if (!open && !busy) {
+                setStockEditing(null);
+                setStockHighlightColor(null);
+              }
+            }}
+          >
+            <DialogContent className="admin-dialog stock-dialog" style={{ maxWidth: 780, maxHeight: "90vh", display: "flex", flexDirection: "column", padding: 0, overflow: "hidden", borderRadius: 16 }}>
+              <DialogHeader style={{ padding: "18px 24px 14px", borderBottom: "1px solid #e2e8f0", background: "#f8fafc", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div>
+                    <DialogTitle style={{ fontSize: 18, fontWeight: 800, color: "#0f172a" }}>
+                      Add & Manage Stock
+                    </DialogTitle>
+                    <DialogDescription style={{ fontSize: 13, color: "#64748b", marginTop: 2 }}>
+                      {hasEmbeddedVariants || hasChildProducts
+                        ? "Set and update stock quantity for each colour variant and size. Overall stock syncs automatically."
+                        : "Set and update stock quantity for the product."}
+                    </DialogDescription>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", background: "#ffffff", padding: "6px 14px", borderRadius: 8, border: "1px solid #cbd5e1" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.4px" }}>Overall Stock</span>
+                    <b style={{ fontSize: 16, fontWeight: 800, color: liveOverallStock > 0 ? "#16a34a" : "#dc2626" }}>
+                      {liveOverallStock} units
+                    </b>
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+                  <Package size={14} style={{ color: "#2563eb" }} />
+                  <strong style={{ color: "#1e293b", fontWeight: 700 }}>{stockEditing.name}</strong>
+                  {stockEditing.sku && (
+                    <span style={{ background: "#e2e8f0", color: "#475569", padding: "1px 6px", borderRadius: 4, fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>
+                      SKU: {stockEditing.sku}
+                    </span>
+                  )}
+                </div>
+              </DialogHeader>
+
+              <form
+                className="admin-fields"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (hasEmbeddedVariants) {
+                    const baseSku = stockEditing.sku || stockEditing.id || "PROD";
+                    const newVariants: ProductVariant[] = [];
+
+                    // 1. Process all existing colors
+                    for (const c of colorVariantItems) {
+                      if (c.sizes.length > 0) {
+                        for (const sz of c.sizes) {
+                          const existingV = (stockEditing.variants || []).find(
+                            (v) => (v.color || "").toLowerCase() === c.color.toLowerCase() && v.size === sz
+                          );
+                          const raw = stockValues[`color:${c.color}:size:${sz}`] ?? String(c.sizeStock[sz] ?? 0);
+                          let vStock = Number(raw);
+                          if (!Number.isFinite(vStock) || vStock < 0) vStock = 0;
+
+                          newVariants.push({
+                            id: existingV?.id || `${stockEditing.id}-${slug(c.color)}-${slug(sz)}-${Date.now()}`,
+                            title: `${stockEditing.name.replace(/\s+·\s+.+$/, "")} · ${c.color} · ${sz}`,
+                            color: c.color,
+                            colorHex: c.colorHex,
+                            sku: existingV?.sku || `${baseSku}-${slug(c.color).toUpperCase()}-${slug(sz).toUpperCase()}`,
+                            size: sz,
+                            stock: vStock,
+                            price: existingV?.price ?? stockEditing.price,
+                            oldPrice: existingV?.oldPrice ?? stockEditing.old,
+                            image: existingV?.image || c.image || stockEditing.image,
+                            images: existingV?.images || (c.image ? [c.image] : undefined),
+                            status: vStock > 0 ? "Active" : "Draft",
+                          });
+                        }
+                      } else {
+                        const existingV = (stockEditing.variants || []).find(
+                          (v) => (v.color || "").toLowerCase() === c.color.toLowerCase()
+                        );
+                        const raw = stockValues[`color:${c.color}`] ?? String(c.stock ?? 0);
+                        let vStock = Number(raw);
+                        if (!Number.isFinite(vStock) || vStock < 0) vStock = 0;
+
+                        newVariants.push({
+                          id: existingV?.id || `${stockEditing.id}-${slug(c.color)}-${Date.now()}`,
+                          title: `${stockEditing.name.replace(/\s+·\s+.+$/, "")} · ${c.color}`,
+                          color: c.color,
+                          colorHex: c.colorHex,
+                          sku: existingV?.sku || `${baseSku}-${slug(c.color).toUpperCase()}`,
+                          size: existingV?.size || "Standard",
+                          stock: vStock,
+                          price: existingV?.price ?? stockEditing.price,
+                          oldPrice: existingV?.oldPrice ?? stockEditing.old,
+                          image: existingV?.image || c.image || stockEditing.image,
+                          images: existingV?.images || (c.image ? [c.image] : undefined),
+                          status: vStock > 0 ? "Active" : "Draft",
+                        });
+                      }
+                    }
+
+                    // 2. Process newly added color from "+ Add Another Colour"
+                    if (stockColorChoice) {
+                      if (productAllSizes.length > 0) {
+                        for (const sz of productAllSizes) {
+                          const raw = stockValues[`new_color:${stockColorChoice}:size:${sz}`] ?? stockValue ?? "0";
+                          let vStock = Number(raw);
+                          if (!Number.isFinite(vStock) || vStock < 0) vStock = 0;
+
+                          newVariants.push({
+                            id: `${stockEditing.id}-${slug(stockColorChoice)}-${slug(sz)}-${Date.now()}`,
+                            title: `${stockEditing.name.replace(/\s+·\s+.+$/, "")} · ${stockColorChoice} · ${sz}`,
+                            color: stockColorChoice,
+                            sku: `${baseSku}-${slug(stockColorChoice).toUpperCase()}-${slug(sz).toUpperCase()}`,
+                            size: sz,
+                            stock: vStock,
+                            price: stockEditing.price,
+                            oldPrice: stockEditing.old,
+                            image: stockEditing.image,
+                            status: vStock > 0 ? "Active" : "Draft",
+                          });
+                        }
+                      } else {
+                        const raw = Number(stockValue);
+                        const vStock = Number.isFinite(raw) && raw >= 0 ? raw : 0;
+                        newVariants.push({
+                          id: `${stockEditing.id}-${slug(stockColorChoice)}-${Date.now()}`,
+                          title: `${stockEditing.name.replace(/\s+·\s+.+$/, "")} · ${stockColorChoice}`,
+                          color: stockColorChoice,
+                          sku: `${baseSku}-${slug(stockColorChoice).toUpperCase()}`,
+                          size: stockEditing.sizes?.[0] || "Standard",
+                          stock: vStock,
+                          price: stockEditing.price,
+                          oldPrice: stockEditing.old,
+                          image: stockEditing.image,
+                          status: vStock > 0 ? "Active" : "Draft",
+                        });
+                      }
+                    }
+
+                    const totalStock = newVariants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
+                    const updatedProduct: ManagedProduct = {
+                      ...stockEditing,
+                      hasVariants: true,
+                      variants: newVariants,
+                      stock: totalStock,
+                      status: totalStock > 0 ? "Active" : stockEditing.status,
+                    };
+
+                    const ok = await write({ action: "product", product: updatedProduct });
+                    if (ok) {
+                      await load();
+                      setStockEditing(null);
+                      setStockHighlightColor(null);
+                      setStockColorChoice("");
+                      setStockValue("");
+                      setStockValues({});
+                      toast.success("Stock updated successfully");
+                    }
+                  } else {
+                    let ok = true;
+                    let totalOverall = 0;
+                    const effectiveSizes = productAllSizes.length > 0 ? productAllSizes : (visibleStockVariants[0] ? sizeOptionsFor(visibleStockVariants[0]) : []);
+
+                    for (const item of stockVariants) {
+                      const itemSizes = effectiveSizes.length > 0 ? effectiveSizes : sizeOptionsFor(item);
+                      const sizeEntries = (itemSizes as string[])
+                        .map((size: string) => [size, stockValues[item.id + ":" + size]])
+                        .filter(([, value]: any) => value !== "" && value != null);
+                      const sizeStock: Record<string, number> = Object.fromEntries(sizeEntries.map(([size, value]: any) => [size, Number(value)]));
+                      const sumSizeStock: number = (Object.values(sizeStock) as number[]).reduce((acc: number, val: number) => acc + (Number(val) || 0), 0);
+                      const rawStock: number = Number(stockValues[item.id] ?? (item as any).stock ?? 0);
+                      const finalStock: number = sizeEntries.length > 0 ? sumSizeStock : rawStock;
+                      if (!Number.isFinite(finalStock) || finalStock < 0) return;
+
+                      totalOverall += finalStock;
+                      ok = await write({
+                        action: "product",
+                        product: {
+                          ...item,
+                          stock: finalStock,
+                          sizes: itemSizes.length > 0 ? itemSizes : item.sizes,
+                          sizeStock,
+                          listingGroup: item.listingGroup || group,
+                          status: finalStock > 0 ? ("Active" as const) : item.status,
+                        },
+                      });
+                      if (!ok) break;
+                    }
+
+                    if (ok && stockColorChoice) {
+                      const itemSizes = productAllSizes.length > 0 ? productAllSizes : (stockEditing.sizes?.length ? stockEditing.sizes : []);
+                      let childStock = 0;
+                      let childSizeStock: Record<string, number> = {};
+
+                      if (itemSizes.length > 0) {
+                        for (const sz of itemSizes) {
+                          const val = Number(stockValues[`new_child:${stockColorChoice}:size:${sz}`] ?? stockValue ?? 0);
+                          const cleanVal = Number.isFinite(val) && val >= 0 ? val : 0;
+                          childSizeStock[sz] = cleanVal;
+                          childStock += cleanVal;
+                        }
+                      } else {
+                        const raw = Number(stockValue);
+                        childStock = Number.isFinite(raw) && raw >= 0 ? raw : 0;
+                      }
+
+                      const baseId = `${group}-${slug(stockColorChoice)}`;
+                      const id = products.some((item) => item.id === baseId) ? `${baseId}-${Date.now()}` : baseId;
+                      const child = {
+                        ...stockEditing,
+                        id,
+                        name: `${stockEditing.name.replace(/\s+·\s+.+$/, "")} · ${stockColorChoice}`,
+                        sku: stockEditing.sku ? `${stockEditing.sku}-${slug(stockColorChoice).toUpperCase()}` : id,
+                        color: stockColorChoice,
+                        option: stockEditing.option || "Standard",
+                        listingGroup: group,
+                        status: childStock > 0 ? ("Active" as const) : ("Draft" as const),
+                        stock: childStock,
+                        sizes: itemSizes.length > 0 ? itemSizes : stockEditing.sizes,
+                        sizeStock: itemSizes.length > 0 ? childSizeStock : undefined,
+                      };
+                      ok = await write({ action: "product", product: child });
+                      if (ok) totalOverall += childStock;
+                    }
+
+                    if (ok && stockEditing.listingGroup) {
+                      const parent = products.find((p) => p.id === group);
+                      if (parent) {
+                        await write({
+                          action: "product",
+                          product: { ...parent, stock: totalOverall, status: totalOverall > 0 ? ("Active" as const) : parent.status },
+                        });
+                      }
+                    }
+
+                    if (ok) {
+                      await load();
+                      setStockEditing(null);
+                      setStockHighlightColor(null);
+                      setStockColorChoice("");
+                      setStockValue("");
+                      setStockValues({});
+                      toast.success("Stock updated successfully");
+                    }
+                  }
+                }}
+                style={{ flex: 1, overflowY: "auto", padding: "20px 24px", display: "flex", flexDirection: "column", gap: 18 }}
+              >
+                {/* List of Colors and Stock */}
+                <div className="stock-colour-list" style={{ display: "flex", flexDirection: "column", gap: 12, margin: 0 }}>
+                  {hasEmbeddedVariants ? (
+                    colorVariantItems.map((c) => {
+                      const isTarget = stockHighlightColor && stockHighlightColor.toLowerCase() === c.color.toLowerCase();
+                      
+                      // Compute total for this color based on sizes if present
+                      let currentNum = 0;
+                      if (c.sizes.length > 0) {
+                        currentNum = c.sizes.reduce((acc, sz) => {
+                          const raw = stockValues[`color:${c.color}:size:${sz}`] ?? String(c.sizeStock[sz] ?? 0);
+                          const val = Number(raw);
+                          return acc + (Number.isFinite(val) && val >= 0 ? val : 0);
+                        }, 0);
+                      } else {
+                        const raw = stockValues[`color:${c.color}`] ?? String(c.stock);
+                        currentNum = Number(raw) || 0;
+                      }
+
+                      const invStatus = currentNum > 10 ? "In Stock" : currentNum > 0 ? "Low Stock" : "Out of Stock";
+                      return (
+                        <div
+                          key={c.color}
+                          style={{
+                            padding: "14px 16px",
+                            borderRadius: 12,
+                            border: isTarget ? "2px solid #3b82f6" : "1px solid #e2e8f0",
+                            background: isTarget ? "#eff6ff" : "#ffffff",
+                            boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 12,
+                            transition: "all 0.2s ease",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                              {c.image && c.image !== "/images/placeholder.jpg" ? (
+                                <img src={imageUrl(c.image)} alt={c.color} style={{ width: 42, height: 42, objectFit: "contain", borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0" }} />
+                              ) : (
+                                <div style={{ width: 42, height: 42, borderRadius: 8, background: "#f1f5f9", display: "grid", placeItems: "center", color: "#94a3b8" }}>
+                                  <Package size={20} />
+                                </div>
+                              )}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  {c.colorHex && <span style={{ width: 12, height: 12, borderRadius: "50%", background: c.colorHex, border: "1px solid rgba(0,0,0,0.2)" }} />}
+                                  <b style={{ fontSize: 14, color: "#0f172a" }}>{c.color}</b>
+                                  <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 4, textTransform: "uppercase", background: invStatus === "In Stock" ? "#f0fdf4" : invStatus === "Low Stock" ? "#fef3c7" : "#fef2f2", color: invStatus === "In Stock" ? "#16a34a" : invStatus === "Low Stock" ? "#d97706" : "#dc2626", border: `1px solid ${invStatus === "In Stock" ? "#bbf7d0" : invStatus === "Low Stock" ? "#fde68a" : "#fecaca"}` }}>
+                                    {invStatus}
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: 11, fontFamily: "monospace", color: "#64748b" }}>SKU: {c.sku}</span>
+                              </div>
+                            </div>
+
+                            {/* Total Stock for this color */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>Total Stock:</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                required
+                                value={String(currentNum)}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (c.sizes.length > 0) {
+                                    setStockValues((prev) => {
+                                      const next = { ...prev };
+                                      for (const s of c.sizes) {
+                                        next[`color:${c.color}:size:${s}`] = val;
+                                      }
+                                      next[`color:${c.color}`] = String(Number(val) * c.sizes.length);
+                                      return next;
+                                    });
+                                  } else {
+                                    setStockValues((prev) => ({ ...prev, [`color:${c.color}`]: val }));
+                                  }
+                                }}
+                                placeholder="0"
+                                style={{ width: 110, height: 38, padding: "0 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 14, fontWeight: 700, color: "#0f172a", textAlign: "center", background: "#ffffff" }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Per-size inputs with bulk set */}
+                          {c.sizes.length > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 10, borderTop: "1px solid #f1f5f9" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.3px" }}>
+                                  Available Sizes ({c.sizes.length})
+                                </span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="Qty"
+                                    id={`bulk-sz-${slug(c.color)}`}
+                                    style={{ width: 65, height: 26, fontSize: 11, padding: "0 6px", borderRadius: 4, border: "1px solid #cbd5e1", textAlign: "center" }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const el = document.getElementById(`bulk-sz-${slug(c.color)}`) as HTMLInputElement;
+                                      const bVal = el ? el.value : "";
+                                      if (bVal !== "") {
+                                        setStockValues((prev) => {
+                                          const next = { ...prev };
+                                          for (const s of c.sizes) {
+                                            next[`color:${c.color}:size:${s}`] = bVal;
+                                          }
+                                          const sum = c.sizes.length * (Number(bVal) || 0);
+                                          next[`color:${c.color}`] = String(sum);
+                                          return next;
+                                        });
+                                      }
+                                    }}
+                                    style={{ height: 26, padding: "0 8px", fontSize: 11, fontWeight: 600, background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe", borderRadius: 4, cursor: "pointer" }}
+                                  >
+                                    Set all sizes
+                                  </button>
+                                </div>
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 8 }}>
+                                {c.sizes.map((sz) => (
+                                  <label key={sz} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, fontWeight: 600, color: "#64748b" }}>
+                                    <span>Size {sz}</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={stockValues[`color:${c.color}:size:${sz}`] ?? String(c.sizeStock[sz] ?? "0")}
+                                      onChange={(e) => {
+                                        const szVal = e.target.value;
+                                        setStockValues((prev) => {
+                                          const next = { ...prev, [`color:${c.color}:size:${sz}`]: szVal };
+                                          const allSizeVals = c.sizes.map((s) => Number(next[`color:${c.color}:size:${s}`] ?? c.sizeStock[s] ?? 0));
+                                          const sum = allSizeVals.reduce((acc, v) => acc + (Number.isFinite(v) && v >= 0 ? v : 0), 0);
+                                          next[`color:${c.color}`] = String(sum);
+                                          return next;
+                                        });
+                                      }}
+                                      placeholder="0"
+                                      style={{ height: 32, padding: "0 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, fontWeight: 600, textAlign: "center", background: "#ffffff" }}
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    visibleStockVariants.map((variant) => {
+                      const isTarget = stockHighlightColor && (stockHighlightColor.toLowerCase() === (variant.color || "").toLowerCase() || stockHighlightColor.toLowerCase() === (variant.name || "").toLowerCase());
+                      const effectiveSizes = productAllSizes.length > 0 ? productAllSizes : sizeOptionsFor(variant);
+                      
+                      let currentNum = 0;
+                      if (effectiveSizes.length > 0) {
+                        currentNum = (effectiveSizes as string[]).reduce((acc: number, sz: string) => {
+                          const raw = stockValues[variant.id + ":" + sz] ?? String(((variant as any).sizeStock || {})[sz] ?? 0);
+                          const val = Number(raw);
+                          return acc + (Number.isFinite(val) && val >= 0 ? val : 0);
+                        }, 0);
+                      } else {
+                        const raw = stockValues[variant.id] ?? String((variant as any).stock ?? 0);
+                        currentNum = Number(raw) || 0;
+                      }
+
+                      const invStatus = currentNum > 10 ? "In Stock" : currentNum > 0 ? "Low Stock" : "Out of Stock";
+                      return (
+                        <div
+                          key={variant.id}
+                          style={{
+                            padding: "14px 16px",
+                            borderRadius: 12,
+                            border: isTarget ? "2px solid #3b82f6" : "1px solid #e2e8f0",
+                            background: isTarget ? "#eff6ff" : "#ffffff",
+                            boxShadow: "0 1px 3px rgba(0,0,0,0.03)",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 12,
+                            transition: "all 0.2s ease",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                              <img src={photo(variant)} alt={variant.color || variant.name} style={{ width: 42, height: 42, objectFit: "contain", borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0" }} />
+                              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <b style={{ fontSize: 14, color: "#0f172a" }}>{variant.color || variant.name}</b>
+                                  <span style={{ fontSize: 9.5, fontWeight: 700, padding: "1px 6px", borderRadius: 4, textTransform: "uppercase", background: invStatus === "In Stock" ? "#f0fdf4" : invStatus === "Low Stock" ? "#fef3c7" : "#fef2f2", color: invStatus === "In Stock" ? "#16a34a" : invStatus === "Low Stock" ? "#d97706" : "#dc2626", border: `1px solid ${invStatus === "In Stock" ? "#bbf7d0" : invStatus === "Low Stock" ? "#fde68a" : "#fecaca"}` }}>
+                                    {invStatus}
+                                  </span>
+                                </div>
+                                {variant.sku && <span style={{ fontSize: 11, fontFamily: "monospace", color: "#64748b" }}>SKU: {variant.sku}</span>}
+                              </div>
+                            </div>
+
+                            {/* Total Stock Input */}
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>Total Stock:</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                required
+                                value={String(currentNum)}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (effectiveSizes.length > 0) {
+                                    setStockValues((prev) => {
+                                      const next = { ...prev };
+                                      for (const s of effectiveSizes) {
+                                        next[variant.id + ":" + s] = val;
+                                      }
+                                      next[variant.id] = String(Number(val) * effectiveSizes.length);
+                                      return next;
+                                    });
+                                  } else {
+                                    setStockValues((current) => ({ ...current, [variant.id]: val }));
+                                  }
+                                }}
+                                placeholder="0"
+                                style={{ width: 110, height: 38, padding: "0 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 14, fontWeight: 700, color: "#0f172a", textAlign: "center", background: "#ffffff" }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Per-size inputs if sizes exist */}
+                          {effectiveSizes.length > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 10, borderTop: "1px solid #f1f5f9" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.3px" }}>
+                                  Available Sizes ({effectiveSizes.length})
+                                </span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    placeholder="Qty"
+                                    id={`bulk-sz-${variant.id}`}
+                                    style={{ width: 65, height: 26, fontSize: 11, padding: "0 6px", borderRadius: 4, border: "1px solid #cbd5e1", textAlign: "center" }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const el = document.getElementById(`bulk-sz-${variant.id}`) as HTMLInputElement;
+                                      const bVal = el ? el.value : "";
+                                      if (bVal !== "") {
+                                        setStockValues((prev) => {
+                                          const next = { ...prev };
+                                          for (const s of effectiveSizes) {
+                                            next[variant.id + ":" + s] = bVal;
+                                          }
+                                          const sum = effectiveSizes.length * (Number(bVal) || 0);
+                                          next[variant.id] = String(sum);
+                                          return next;
+                                        });
+                                      }
+                                    }}
+                                    style={{ height: 26, padding: "0 8px", fontSize: 11, fontWeight: 600, background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe", borderRadius: 4, cursor: "pointer" }}
+                                  >
+                                    Set all sizes
+                                  </button>
+                                </div>
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 8 }}>
+                                {(effectiveSizes as string[]).map((size: string) => (
+                                  <label key={size} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, fontWeight: 600, color: "#64748b" }}>
+                                    <span>Size {size}</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={stockValues[variant.id + ":" + size] ?? String(((variant as any).sizeStock || {})[size] ?? "0")}
+                                      onChange={(event) => {
+                                        const szVal = event.target.value;
+                                        setStockValues((current) => {
+                                          const next = { ...current, [variant.id + ":" + size]: szVal };
+                                          const sum = (effectiveSizes as string[]).reduce((acc: number, s: string) => {
+                                            const num = Number(next[variant.id + ":" + s] ?? ((variant as any).sizeStock || {})[s] ?? 0);
+                                            return acc + (Number.isFinite(num) && num >= 0 ? num : 0);
+                                          }, 0);
+                                          next[variant.id] = String(sum);
+                                          return next;
+                                        });
+                                      }}
+                                      placeholder="0"
+                                      style={{ height: 32, padding: "0 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, fontWeight: 600, textAlign: "center", background: "#ffffff" }}
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Add Another Colour Section */}
+                <div style={{ border: "1px dashed #94a3b8", borderRadius: 12, padding: "14px 16px", background: "#f8fafc", display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", display: "flex", alignItems: "center", gap: 6 }}>
+                    <Plus size={15} style={{ color: "#2563eb" }} /> Add Another Colour to Inventory
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 12, alignItems: "end" }}>
+                    <label style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#475569" }}>
+                      Select Colour
+                      <select
+                        value={stockColorChoice}
+                        onChange={(e) => {
+                          const newCol = e.target.value;
+                          setStockColorChoice(newCol);
+                          if (newCol && productAllSizes.length > 0) {
+                            setStockValues((prev) => {
+                              const next = { ...prev };
+                              for (const sz of productAllSizes) {
+                                const key = hasEmbeddedVariants
+                                  ? `new_color:${newCol}:size:${sz}`
+                                  : `new_child:${newCol}:size:${sz}`;
+                                if (next[key] === undefined) {
+                                  next[key] = stockValue || "0";
+                                }
+                              }
+                              return next;
+                            });
+                          }
+                        }}
+                        style={{ width: "100%", height: 38, borderRadius: 8, border: "1px solid #cbd5e1", padding: "0 10px", marginTop: 4, background: "#ffffff", fontSize: 13, fontWeight: 600 }}
+                      >
+                        <option value="">-- Choose a color --</option>
+                        {availableStockColors.map((color) => (
+                          <option key={color} value={color}>{color}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {stockColorChoice ? (
+                      <label style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#475569" }}>
+                        Total Stock
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={
+                            productAllSizes.length > 0
+                              ? productAllSizes.reduce((sum, sz) => {
+                                  const key = hasEmbeddedVariants
+                                    ? `new_color:${stockColorChoice}:size:${sz}`
+                                    : `new_child:${stockColorChoice}:size:${sz}`;
+                                  const val = Number(stockValues[key] ?? stockValue ?? 0);
+                                  return sum + (Number.isFinite(val) && val >= 0 ? val : 0);
+                                }, 0)
+                              : stockValue
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setStockValue(val);
+                            if (productAllSizes.length > 0) {
+                              setStockValues((prev) => {
+                                const next = { ...prev };
+                                for (const sz of productAllSizes) {
+                                  const key = hasEmbeddedVariants
+                                    ? `new_color:${stockColorChoice}:size:${sz}`
+                                    : `new_child:${stockColorChoice}:size:${sz}`;
+                                  next[key] = val;
+                                }
+                                return next;
+                              });
+                            }
+                          }}
+                          placeholder="0"
+                          style={{ width: "100%", height: 38, borderRadius: 8, border: "1px solid #cbd5e1", padding: "0 10px", marginTop: 4, background: "#ffffff", fontSize: 13, fontWeight: 700, textAlign: "center" }}
+                        />
+                      </label>
+                    ) : (
+                      <div style={{ fontSize: 11, color: "#94a3b8", paddingBottom: 10 }}>Select color to enter initial stock</div>
+                    )}
+                  </div>
+
+                  {/* Available Sizes Breakdown for Newly Selected Color */}
+                  {stockColorChoice && productAllSizes.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 10, borderTop: "1px solid #e2e8f0" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: "#334155" }}>
+                          Available Sizes for {stockColorChoice} ({productAllSizes.length} sizes):
+                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="Qty"
+                            id="bulk-sz-new-color"
+                            style={{ width: 65, height: 26, fontSize: 11, padding: "0 6px", borderRadius: 4, border: "1px solid #cbd5e1", textAlign: "center" }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById("bulk-sz-new-color") as HTMLInputElement;
+                              const bVal = el ? el.value : "";
+                              if (bVal !== "") {
+                                setStockValue(bVal);
+                                setStockValues((prev) => {
+                                  const next = { ...prev };
+                                  for (const s of productAllSizes) {
+                                    const key = hasEmbeddedVariants
+                                      ? `new_color:${stockColorChoice}:size:${s}`
+                                      : `new_child:${stockColorChoice}:size:${s}`;
+                                    next[key] = bVal;
+                                  }
+                                  return next;
+                                });
+                              }
+                            }}
+                            style={{ height: 26, padding: "0 8px", fontSize: 11, fontWeight: 600, background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe", borderRadius: 4, cursor: "pointer" }}
+                          >
+                            Set all sizes
+                          </button>
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 8 }}>
+                        {productAllSizes.map((sz) => {
+                          const key = hasEmbeddedVariants
+                            ? `new_color:${stockColorChoice}:size:${sz}`
+                            : `new_child:${stockColorChoice}:size:${sz}`;
+                          return (
+                            <label key={sz} style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, fontWeight: 600, color: "#64748b" }}>
+                              <span>Size {sz}</span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={stockValues[key] ?? stockValue ?? "0"}
+                                onChange={(e) => {
+                                  const szVal = e.target.value;
+                                  setStockValues((prev) => ({
+                                    ...prev,
+                                    [key]: szVal,
+                                  }));
+                                }}
+                                placeholder="0"
+                                style={{ height: 32, padding: "0 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 12, fontWeight: 600, textAlign: "center", background: "#ffffff" }}
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, paddingTop: 10, borderTop: "1px solid #e2e8f0" }}>
+                  <button
+                    type="button"
+                    className="admin-secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      setStockEditing(null);
+                      setStockHighlightColor(null);
+                    }}
+                    style={{ padding: "8px 18px", borderRadius: 8, fontWeight: 600 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="admin-primary"
+                    disabled={busy}
+                    style={{ padding: "8px 24px", borderRadius: 8, fontWeight: 700, background: "#2563eb", color: "#ffffff", display: "inline-flex", alignItems: "center", gap: 6 }}
+                  >
+                    {busy ? "Saving Stock…" : "Save Stock & Recalculate Overall"}
+                  </button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
+        );
       })()}
       <ImageManager
         product={imageEditing}
@@ -4637,7 +7148,7 @@ export default function Admin() {
                     action: "product",
                     product: {
                       ...editing,
-                      features: editing.features
+                      features: (editing.features || [])
                         .map((f) => f.trim())
                         .filter(Boolean),
                     },
@@ -4761,7 +7272,7 @@ export default function Admin() {
               <label>
                 Features (one per line)
                 <textarea
-                  value={editing.features.join("\n")}
+                  value={(editing.features || []).join("\n")}
                   onChange={(e) =>
                     setEditing({
                       ...editing,
@@ -4828,207 +7339,69 @@ export default function Admin() {
         </DialogContent>
       </Dialog>
       {addColorSource && (
-        <Dialog open onOpenChange={(open) => { if (!open && !busy) { setAddColorSource(null); setAddColorImages([]); } }}>
-          <DialogContent className="add-color-dialog">
-            <DialogHeader>
-              <DialogTitle>Add Color Variant To {addColorSource.sku || addColorSource.id}</DialogTitle>
-              <DialogDescription>Create a child product variant and attach photos.</DialogDescription>
-            </DialogHeader>
-            <form
-              onSubmit={async (event) => {
-                event.preventDefault();
-                if (!addColorChoice) return;
-                const group = addColorSource.listingGroup || addColorSource.id;
-                const baseId = `${group}-${slug(addColorChoice)}`;
-                const id = products.some((item) => item.id === baseId) ? `${baseId}-${Date.now()}` : baseId;
-                const proposedSku = addColorSource.sku ? `${addColorSource.sku}-${slug(addColorChoice).toUpperCase()}` : id;
-                const uniqueSku = products.some((item) => (item.sku || "").trim().toLowerCase() === proposedSku.trim().toLowerCase())
-                  ? `${proposedSku}-${Math.floor(100 + Math.random() * 900)}`
-                  : proposedSku;
-                const child = {
-                  ...addColorSource,
-                  id,
-                  name: `${addColorSource.name.replace(/\s+·\s+.+$/, "")} · ${addColorChoice}`,
-                  sku: uniqueSku,
-                  color: addColorChoice,
-                  option: addColorSource.option || "Standard",
-                  listingGroup: group,
-                  image: addColorImages[0] || addColorSource.image,
-                  images: addColorImages.length ? addColorImages : addColorSource.images,
-                  status: "Draft" as const,
-                };
-                const parent = { ...addColorSource, listingGroup: group };
-                if (await write({ action: "product", product: parent }) && await write({ action: "product", product: child })) {
-                  await load();
-                  setAddColorSource(null);
-                  setAddColorChoice("");
-                  setAddColorImages([]);
-                  toast.success(`${addColorChoice} colour variant added with ${addColorImages.length || 1} image(s)`);
-                }
-              }}
-              className="admin-fields"
-              style={{ display: "flex", flexDirection: "column", gap: 16 }}
-            >
-              <label style={{ margin: 0 }}>
-                Choose Color
-                <select required value={addColorChoice} onChange={(event) => setAddColorChoice(event.target.value)}>
-                  <option value="">--select color--</option>
-                  {colors
-                    .filter((color) => color !== "Not applicable" && !colorVariantsFor(addColorSource).some((item) => item.color === color))
-                    .map((color) => (
-                      <option key={color} value={color}>{color}</option>
-                    ))}
-                </select>
-              </label>
-
-              {/* Variant Multi-Image Upload Option */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <span style={{ fontSize: 13, fontWeight: 500, color: "#49617e" }}>Colour Images</span>
-                  <span style={{ fontSize: 11, color: "#64748b" }}>{addColorImages.length} image(s) selected</span>
-                </div>
-                <div
-                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                  onDrop={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const files = Array.from(e.dataTransfer.files || []);
-                    if (!files.length) return;
-                    const uploadedUrls: string[] = [];
-                    for (const file of files) {
-                      try {
-                        const r = await fetch("/api/media", {
-                          method: "POST",
-                          headers: { "Content-Type": file.type || "image/jpeg" },
-                          body: file,
-                        });
-                        const d: any = await r.json();
-                        if (r.ok && d.url) uploadedUrls.push(d.url);
-                        else toast.error(d.error || `Failed to upload ${file.name}`);
-                      } catch (err) {
-                        toast.error(`Failed to upload ${file.name}`);
-                      }
-                    }
-                    if (uploadedUrls.length) {
-                      setAddColorImages((current) => Array.from(new Set([...current, ...uploadedUrls])));
-                      toast.success(`Uploaded ${uploadedUrls.length} image(s)`);
-                    }
-                  }}
-                  onClick={() => {
-                    const input = document.createElement("input");
-                    input.type = "file";
-                    input.accept = "image/*";
-                    input.multiple = true;
-                    input.onchange = async (e: any) => {
-                      const files = Array.from(e.target.files || []) as File[];
-                      if (!files.length) return;
-                      const uploadedUrls: string[] = [];
-                      for (const file of files) {
-                        try {
-                          const r = await fetch("/api/media", {
-                            method: "POST",
-                            headers: { "Content-Type": file.type || "image/jpeg" },
-                            body: file,
-                          });
-                          const d: any = await r.json();
-                          if (r.ok && d.url) uploadedUrls.push(d.url);
-                          else toast.error(d.error || `Failed to upload ${file.name}`);
-                        } catch (err) {
-                          toast.error(`Failed to upload ${file.name}`);
-                        }
-                      }
-                      if (uploadedUrls.length) {
-                        setAddColorImages((current) => Array.from(new Set([...current, ...uploadedUrls])));
-                        toast.success(`Uploaded ${uploadedUrls.length} image(s)`);
-                      }
-                    };
-                    input.click();
-                  }}
-                  style={{
-                    border: "2px dashed #3b82f6",
-                    borderRadius: 10,
-                    padding: "20px 16px",
-                    textAlign: "center",
-                    background: "#eff6ff",
-                    cursor: "pointer",
-                  }}
-                >
-                  <Upload size={24} style={{ margin: "0 auto 6px", color: "#2563eb" }} />
-                  <b style={{ display: "block", fontSize: 13, color: "#1e3a8a", marginBottom: 2 }}>
-                    Click or drag & drop multiple photos here
-                  </b>
-                  <span style={{ fontSize: 11, color: "#3b82f6" }}>Select multiple image files at once</span>
-                </div>
-
-                {/* Multiple Image Preview Gallery */}
-                {addColorImages.length > 0 && (
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, padding: 8, background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                    {addColorImages.map((url, idx) => (
-                      <div
-                        key={url + idx}
-                        style={{
-                          width: 64,
-                          height: 64,
-                          borderRadius: 8,
-                          border: idx === 0 ? "2px solid #2563eb" : "1px solid #cbd5e1",
-                          background: "#ffffff",
-                          position: "relative",
-                          overflow: "hidden",
-                        }}
-                      >
-                        <img src={url} alt={`Color variant image ${idx + 1}`} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                        {idx === 0 && (
-                          <span style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "#2563eb", color: "#fff", fontSize: 8, textAlign: "center", fontWeight: 700 }}>
-                            COVER
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setAddColorImages((current) => current.filter((_, i) => i !== idx));
-                          }}
-                          style={{
-                            position: "absolute",
-                            top: 2,
-                            right: 2,
-                            width: 18,
-                            height: 18,
-                            borderRadius: "50%",
-                            background: "#ef4444",
-                            color: "#fff",
-                            border: 0,
-                            fontSize: 10,
-                            display: "grid",
-                            placeItems: "center",
-                            cursor: "pointer",
-                          }}
-                          title="Remove image"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {colorVariantsFor(addColorSource).length > 0 && (
-                <p className="variant-link-preview" style={{ margin: 0 }}>
-                  <b>{colorVariantsFor(addColorSource).length} Colour {colorVariantsFor(addColorSource).length === 1 ? "Variant" : "Variants"}</b>
-                  <span>Available Colours: {colorVariantsFor(addColorSource).map((item) => item.color || item.name).join(" | ")}</span>
-                </p>
-              )}
-
-              <div className="admin-form-actions" style={{ marginTop: 10 }}>
-                <button type="submit" className="admin-primary" disabled={!addColorChoice || busy}>
-                  {busy ? "Saving..." : "Save Variant"}
-                </button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
+        <AddColorModal
+          product={addColorSource}
+          open={!!addColorSource}
+          busy={busy}
+          onOpenChange={(open) => {
+            if (!open && !busy) setAddColorSource(null);
+          }}
+          onSave={async (updatedProd) => {
+            if (await write({ action: "product", product: updatedProd })) {
+              await load();
+              setAddColorSource(null);
+            }
+          }}
+        />
       )}
+
+      {/* Manage Inventory Modal Workspace */}
+      <InventoryModal
+        open={Boolean(inventoryModalProduct)}
+        onOpenChange={(open: boolean) => {
+          if (!open) {
+            setInventoryModalProduct(null);
+            setInventoryModalTargetColor(null);
+          }
+        }}
+        product={inventoryModalProduct}
+        targetColor={inventoryModalTargetColor}
+        onSave={handleSaveInventory}
+      />
+
+      {/* Stock History Audit Modal */}
+      <StockHistoryModal
+        open={Boolean(stockHistoryModalProduct)}
+        onOpenChange={(open: boolean) => {
+          if (!open) {
+            setStockHistoryModalProduct(null);
+            setStockHistoryVariantSku(null);
+            setStockHistoryVariantColor(null);
+            setStockHistoryVariantSize(null);
+          }
+        }}
+        product={stockHistoryModalProduct}
+        variantSku={stockHistoryVariantSku}
+        variantColor={stockHistoryVariantColor}
+        variantSize={stockHistoryVariantSize}
+      />
+
+      {/* Safe Color Removal & Disable Modal */}
+      <RemoveColorModal
+        open={Boolean(removeColorProduct && removeColorTarget)}
+        onOpenChange={(open: boolean) => {
+          if (!open) {
+            setRemoveColorProduct(null);
+            setRemoveColorTarget(null);
+          }
+        }}
+        product={removeColorProduct}
+        colorVariant={removeColorTarget}
+        onDisableInstead={handleDisableColorInstead}
+        onDeletePermanently={handleDeleteColorPermanently}
+        busy={busy}
+      />
+
       {/* History Dialog */}
       <Dialog
         open={!!historyOrder}
@@ -5597,40 +7970,123 @@ export default function Admin() {
                 </button>
               </div>
 
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                {selected.status !== "Cancelled" ? (
-                  <button
-                    type="button"
-                    style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
-                    onClick={() => {
-                      setCancelModalOrder(selected);
-                      setCancelReason("Customer changed mind / duplicate order");
-                      setCancelCustomNote("");
-                    }}
-                  >
-                    <X size={14} /> Cancel this order
-                  </button>
-                ) : <div />}
+              {/* More Actions Section */}
+              <div
+                style={{
+                  marginTop: 16,
+                  paddingTop: 12,
+                  borderTop: "1px solid #e2e8f0",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  More Actions
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {(["Returned", "RTO", "Failed Delivery"].includes(selected.status) || selected.details?.returnStatus === "Returned") && (
+                    <div>
+                      {selected.details?.returnRestocked ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#16a34a", fontWeight: 600, background: "#f0fdf4", padding: "8px 12px", borderRadius: 6, border: "1px solid #bbf7d0" }}>
+                          <CheckCircle2 size={15} /> Returned items restocked into inventory
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          style={{
+                            width: "100%",
+                            background: "#eff6ff",
+                            border: "1px solid #bfdbfe",
+                            color: "#1d4ed8",
+                            padding: "8px 12px",
+                            borderRadius: 6,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 6,
+                          }}
+                          onClick={async () => {
+                            if (window.confirm("Restock inspected items from this returned order back into inventory?")) {
+                              const res = await write({ action: "restock-return", orderId: selected.id });
+                              if (res) {
+                                toast.success("Returned items restocked successfully into inventory");
+                                const updatedDetails = { ...selected.details, returnRestocked: true };
+                                setSelected({ ...selected, details: updatedDetails });
+                                setData((d) => d ? {
+                                  ...d,
+                                  orders: d.orders.map((o) => o.id === selected.id ? { ...o, details: updatedDetails } : o)
+                                } : d);
+                                await load();
+                              }
+                            }
+                          }}
+                        >
+                          <RotateCcw size={14} /> Restock Returned Items (Staff Inspected)
+                        </button>
+                      )}
+                    </div>
+                  )}
 
-                <button
-                  type="button"
-                  style={{ background: "none", border: "none", color: "#ef4444", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
-                  onClick={async () => {
-                    if (window.confirm(`Are you sure you want to permanently delete order #${selected.id.slice(0, 8)}? This will restore inventory stock.`)) {
-                      const delId = selected.id;
-                      await write({ action: "delete-order", id: delId });
-                      setSelected(null);
-                      setData((curr) => curr ? {
-                        ...curr,
-                        orders: curr.orders.filter((item) => item.id !== delId),
-                      } : curr);
-                      setSelectedOrderIds((curr) => curr.filter((id) => id !== delId));
-                      toast.success(`Order #${delId.slice(0, 8)} deleted successfully`);
-                    }
-                  }}
-                >
-                  <Trash2 size={14} /> Delete order
-                </button>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  {selected.status !== "Cancelled" ? (
+                    <button
+                      type="button"
+                      style={{
+                        background: "#fff7ed",
+                        border: "1px solid #fed7aa",
+                        color: "#c2410c",
+                        padding: "6px 12px",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                      onClick={() => {
+                        setCancelModalOrder(selected);
+                        setCancelReason("Customer changed mind / duplicate order");
+                        setCancelCustomNote("");
+                      }}
+                    >
+                      <X size={14} /> Cancel Order
+                    </button>
+                  ) : (
+                    <div />
+                  )}
+
+                  {(data?.role === "super_admin" || data?.permissions?.includes("orders.delete") || data?.role === "admin") && (
+                    <button
+                      type="button"
+                      style={{
+                        background: "#fef2f2",
+                        border: "1px solid #fecaca",
+                        color: "#dc2626",
+                        padding: "6px 12px",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                      onClick={() => {
+                        setDeleteModalOrder(selected);
+                      }}
+                      title="Permanently remove invalid/mistake/test record (Super Admin / Authorized Admin)"
+                    >
+                      <Trash2 size={14} /> Delete Order
+                    </button>
+                  )}
+                </div>
+                </div>
               </div>
             </div>
           )}
@@ -5803,7 +8259,7 @@ export default function Admin() {
                     className="csr-btn csr-btn-whatsapp"
                     style={{ padding: "7px 14px", fontSize: 12 }}
                     onClick={() => {
-                      const msg = getWhatsAppConfirmationMessage(csrOrder, csrTemplateTab, config?.logoText || "Zeliy Pakistan");
+                      const msg = getWhatsAppConfirmationMessage(csrOrder, csrTemplateTab, config?.logoText || "Cartify Pakistan");
                       openWhatsApp(csrEditablePhone || csrOrder.details.phone, msg);
                     }}
                   >
@@ -5938,7 +8394,7 @@ export default function Admin() {
                         }
                       },
                       csrTemplateTab,
-                      config?.logoText || "Zeliy Pakistan"
+                      config?.logoText || "Cartify Pakistan"
                     )}
                   </div>
 
@@ -5960,7 +8416,7 @@ export default function Admin() {
                             }
                           },
                           csrTemplateTab,
-                          config?.logoText || "Zeliy Pakistan"
+                          config?.logoText || "Cartify Pakistan"
                         );
                         navigator.clipboard.writeText(msg);
                         toast.success("WhatsApp message copied to clipboard!");
@@ -5985,7 +8441,7 @@ export default function Admin() {
                             }
                           },
                           csrTemplateTab,
-                          config?.logoText || "Zeliy Pakistan"
+                          config?.logoText || "Cartify Pakistan"
                         );
                         openWhatsApp(csrEditablePhone || csrOrder.details.phone, msg);
                         setCsrStatusInput("WhatsApp Sent");
@@ -6153,491 +8609,384 @@ export default function Admin() {
         </DialogContent>
       </Dialog>
 
-      {/* Manual Order Creation Dialog */}
-      <Dialog
+      {/* Enhanced Manual Order Creation Modal */}
+      <ManualOrderModal
         open={manualOrderModalOpen}
-        onOpenChange={(open) => {
-          if (!open && !busy) setManualOrderModalOpen(false);
+        onOpenChange={setManualOrderModalOpen}
+        products={products}
+        orders={orders}
+        config={config}
+        currentUser={data ? { name: data.name, role: data.role } : undefined}
+        onOrderCreated={(newOrder) => {
+          setData((current) =>
+            current
+              ? {
+                  ...current,
+                  orders: [newOrder, ...current.orders.filter((o) => o.id !== newOrder.id)],
+                }
+              : current
+          );
+          load();
         }}
-      >
-        <DialogContent className="admin-dialog admin-dialog-manual-order sm:max-w-6xl" style={{ maxWidth: "min(1180px, 96vw)", width: "96vw", maxHeight: "92vh", overflowY: "auto", padding: "28px 32px" }}>
-          <DialogHeader>
-            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 20, fontWeight: 700, color: "#0f172a" }}>
-              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: 8, background: "#dcfce7", color: "#16a34a" }}>
-                <ShoppingBag size={20} />
-              </span>
-              Place Manual Order
-            </DialogTitle>
-            <DialogDescription style={{ fontSize: 13.5, color: "#64748b", marginTop: 4 }}>
-              Record phone, WhatsApp, Instagram, or counter walk-in orders with real-time stock deduction and automated tracking.
-            </DialogDescription>
-          </DialogHeader>
+        onPrintAirwayBill={(order) => {
+          setAirwayBillOrders([order]);
+          setCourierName(order.details.courier || "Trax Logistics");
+          setTimeout(() => window.print(), 150);
+        }}
+        onNavigateToOrder={(orderId) => {
+          setSection("orders");
+          setQuery(orderId);
+        }}
+      />
 
-          <form onSubmit={handleCreateManualOrder}>
-            <div className="manual-order-grid" style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 28, marginTop: 18 }}>
-              {/* Left Column: Customer & Delivery Info */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, borderBottom: "1px solid #f1f5f9" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 6, background: "#ede9fe", color: "#6366f1" }}>
-                    <User size={15} />
-                  </span>
-                  <h4 style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", margin: 0 }}>
-                    1. Customer &amp; Delivery Details
-                  </h4>
-                </div>
+      {/* Customer Lifetime History Drawer */}
+      <CustomerHistoryDrawer
+        phone={customerHistoryPhone}
+        orders={orders as LifecycleOrder[]}
+        open={!!customerHistoryPhone}
+        onOpenChange={(open) => {
+          if (!open) setCustomerHistoryPhone(null);
+        }}
+        onSelectOrder={(ord) => {
+          setSelected(ord as any);
+          setStatus(ord.status);
+          setSaveError("");
+        }}
+      />
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Customer Full Name *</label>
-                  <input
-                    required
-                    placeholder="e.g. Muhammad Ali"
-                    value={manualCustomerName}
-                    onChange={(e) => setManualCustomerName(e.target.value)}
-                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
-                  />
-                </div>
+      {/* Order Audit Timeline Drawer */}
+      <OrderHistoryDrawer
+        order={historyTimelineOrder}
+        open={!!historyTimelineOrder}
+        onOpenChange={(open) => {
+          if (!open) setHistoryTimelineOrder(null);
+        }}
+      />
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Mobile Phone *</label>
-                    <input
-                      required
-                      placeholder="0300 1234567"
-                      value={manualCustomerPhone}
-                      onChange={(e) => setManualCustomerPhone(e.target.value)}
-                      style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
-                    />
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Alt Phone (Optional)</label>
-                    <input
-                      placeholder="0321 7654321"
-                      value={manualCustomerAltPhone}
-                      onChange={(e) => setManualCustomerAltPhone(e.target.value)}
-                      style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Province</label>
-                    <select
-                      value={manualCustomerProvince}
-                      onChange={(e) => {
-                        setManualCustomerProvince(e.target.value);
-                        const cities = (PAKISTAN_CITIES_BY_PROVINCE as any)[e.target.value] || [];
-                        if (cities.length > 0) setManualCustomerCity(cities[0]);
-                      }}
-                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
-                    >
-                      {PAKISTAN_PROVINCES.map((prov) => (
-                        <option key={prov} value={prov}>{prov}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Destination City *</label>
-                    <select
-                      value={manualCustomerCity}
-                      onChange={(e) => setManualCustomerCity(e.target.value)}
-                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
-                    >
-                      {((PAKISTAN_CITIES_BY_PROVINCE as any)[manualCustomerProvince] || ALL_PAKISTAN_CITIES).map((c: string) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                      <option value="Other">Other City / Area…</option>
-                    </select>
-                  </div>
-                </div>
-
-                {manualCustomerCity === "Other" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Custom City Name *</label>
-                    <input
-                      required
-                      placeholder="Enter custom city or tehsil"
-                      value={manualCustomerCustomCity}
-                      onChange={(e) => setManualCustomerCustomCity(e.target.value)}
-                      style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
-                    />
-                  </div>
-                )}
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Complete Delivery Address *</label>
-                  <textarea
-                    required
-                    rows={3}
-                    placeholder="House / Flat #, Street #, Mohallah / Block, Sector…"
-                    value={manualCustomerAddress}
-                    onChange={(e) => setManualCustomerAddress(e.target.value)}
-                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, resize: "vertical", lineHeight: 1.5 }}
-                  />
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Nearest Landmark (Optional)</label>
-                  <input
-                    placeholder="e.g. Near Shell Pump / Gourmet Bakery"
-                    value={manualCustomerLandmark}
-                    onChange={(e) => setManualCustomerLandmark(e.target.value)}
-                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
-                  />
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Order Channel / Source</label>
-                    <select
-                      value={manualCustomerSource}
-                      onChange={(e) => setManualCustomerSource(e.target.value)}
-                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
-                    >
-                      <option value="WhatsApp Order">💬 WhatsApp Order</option>
-                      <option value="Phone Call Order">📞 Phone Call Order</option>
-                      <option value="Instagram / FB DM">📸 Instagram / FB DM</option>
-                      <option value="Counter / Walk-in">🏪 Counter / Walk-in</option>
-                      <option value="Direct Web Entry">🌐 Direct Web Entry</option>
-                    </select>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Initial Status</label>
-                    <select
-                      value={manualInitialCsrStatus}
-                      onChange={(e) => setManualInitialCsrStatus(e.target.value as any)}
-                      style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
-                    >
-                      <option value="Confirmed">🟢 CSR Confirmed (Direct to Picklist)</option>
-                      <option value="Pending">🟡 Pending Verification Call</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Order Note / Customer Request</label>
-                  <input
-                    placeholder="e.g. Call before delivery, urgent delivery"
-                    value={manualOrderNote}
-                    onChange={(e) => setManualOrderNote(e.target.value)}
-                    style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42 }}
-                  />
-                </div>
-              </div>
-
-              {/* Right Column: Product Selection & Pricing */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8, borderBottom: "1px solid #f1f5f9" }}>
-                  <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 6, background: "#dcfce7", color: "#16a34a" }}>
-                    <Package size={15} />
-                  </span>
-                  <h4 style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", margin: 0 }}>
-                    2. Items &amp; Order Pricing
-                  </h4>
-                </div>
-
-                {/* Product Picker Box */}
-                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <label style={{ fontSize: 12.5, fontWeight: 600, color: "#334155" }}>Select Product to Add</label>
-                      {manualProductSearch && (
-                        <span style={{ fontSize: 11, color: "#64748b" }}>
-                          {products.filter((p) => p.status === "Active" && (
-                            p.name.toLowerCase().includes(manualProductSearch.toLowerCase()) ||
-                            (p.sku && p.sku.toLowerCase().includes(manualProductSearch.toLowerCase())) ||
-                            (p.color && p.color.toLowerCase().includes(manualProductSearch.toLowerCase()))
-                          )).length} found
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Search Input for Products */}
-                    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-                      <Search size={14} style={{ position: "absolute", left: 10, color: "#94a3b8", pointerEvents: "none" }} />
-                      <input
-                        type="text"
-                        placeholder="Search product by name, SKU or color..."
-                        value={manualProductSearch}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setManualProductSearch(val);
-                          const active = products.filter((p) => p.status === "Active");
-                          const filtered = active.filter((p) =>
-                            p.name.toLowerCase().includes(val.toLowerCase()) ||
-                            (p.sku && p.sku.toLowerCase().includes(val.toLowerCase())) ||
-                            (p.color && p.color.toLowerCase().includes(val.toLowerCase()))
-                          );
-                          if (filtered.length > 0 && !filtered.some((p) => p.id === manualProductChoice)) {
-                            setManualProductChoice(filtered[0].id);
-                            const sizes = sizeOptionsFor(filtered[0]);
-                            setManualSizeChoice(sizes[0] || "Standard");
+      {/* COD Settlement & Remittance Reconciliation Modal */}
+      <CodSettlementModal
+        open={codSettlementOpen}
+        onOpenChange={setCodSettlementOpen}
+        orders={orders as LifecycleOrder[]}
+        currentUser={{ role: data?.role, name: data?.name, permissions: data?.permissions }}
+        onRecordSettlement={async (orderId, txParams) => {
+          const res = await write({
+            action: "cod-settle",
+            orderId,
+            ...txParams,
+          });
+          if (res && res.ok) {
+            setData((curr) =>
+              curr
+                ? {
+                    ...curr,
+                    orders: curr.orders.map((o) =>
+                      o.id === orderId
+                        ? {
+                            ...o,
+                            status: res.status || o.status,
+                            details: {
+                              ...o.details,
+                              ...(res.details || {}),
+                            },
                           }
-                        }}
-                        style={{
-                          width: "100%",
-                          padding: "8px 30px 8px 30px",
-                          borderRadius: 7,
-                          border: "1px solid #cbd5e1",
-                          fontSize: 12.5,
-                          height: 36,
-                          background: "#ffffff",
-                        }}
-                      />
-                      {manualProductSearch && (
-                        <button
-                          type="button"
-                          onClick={() => setManualProductSearch("")}
-                          style={{
-                            position: "absolute",
-                            right: 6,
-                            background: "none",
-                            border: "none",
-                            color: "#94a3b8",
-                            cursor: "pointer",
-                            padding: 4,
-                            display: "flex",
-                            alignItems: "center",
-                          }}
-                          title="Clear search"
-                        >
-                          <X size={13} />
-                        </button>
-                      )}
-                    </div>
+                        : o
+                    ),
+                  }
+                : curr
+            );
+            if (selected?.id === orderId) {
+              setSelected((curr) =>
+                curr
+                  ? {
+                      ...curr,
+                      status: res.status || curr.status,
+                      details: { ...curr.details, ...(res.details || {}) },
+                    }
+                  : null
+              );
+            }
+            toast.success(`COD settlement of Rs. ${txParams.amount} recorded`);
+            return true;
+          }
+          return false;
+        }}
+        onBulkRemittance={async (batch) => {
+          const res = await write({
+            action: "cod-bulk-remittance",
+            ...batch,
+          });
+          if (res && res.ok) {
+            await load();
+            toast.success(
+              `Remittance ${batch.remittanceId} processed: ${batch.orderSettlements.length} orders settled`
+            );
+            return true;
+          }
+          return false;
+        }}
+        onReverseSettlement={async (orderId, transactionId, reason, note) => {
+          const res = await write({
+            action: "cod-reverse",
+            orderId,
+            transactionId,
+            reason,
+            note,
+          });
+          if (res && res.ok) {
+            setData((curr) =>
+              curr
+                ? {
+                    ...curr,
+                    orders: curr.orders.map((o) =>
+                      o.id === orderId
+                        ? {
+                            ...o,
+                            status: res.status || o.status,
+                            details: {
+                              ...o.details,
+                              ...(res.details || {}),
+                            },
+                          }
+                        : o
+                    ),
+                  }
+                : curr
+            );
+            if (selected?.id === orderId) {
+              setSelected((curr) =>
+                curr
+                  ? {
+                      ...curr,
+                      status: res.status || curr.status,
+                      details: { ...curr.details, ...(res.details || {}) },
+                    }
+                  : null
+              );
+            }
+            toast.success("Settlement reversal recorded successfully");
+            return true;
+          }
+          return false;
+        }}
+        onDisputeOrder={async (orderId, reason, notes, resolve) => {
+          const res = await write({
+            action: "cod-dispute",
+            orderId,
+            reason,
+            notes,
+            resolve,
+          });
+          if (res && res.ok) {
+            setData((curr) =>
+              curr
+                ? {
+                    ...curr,
+                    orders: curr.orders.map((o) =>
+                      o.id === orderId
+                        ? {
+                            ...o,
+                            details: {
+                              ...o.details,
+                              ...(res.details || {}),
+                            },
+                          }
+                        : o
+                    ),
+                  }
+                : curr
+            );
+            if (selected?.id === orderId) {
+              setSelected((curr) =>
+                curr
+                  ? {
+                      ...curr,
+                      details: { ...curr.details, ...(res.details || {}) },
+                    }
+                  : null
+              );
+            }
+            toast.success(resolve ? "Dispute resolved" : "Order flagged as Disputed");
+            return true;
+          }
+          return false;
+        }}
+        onSelectOrderForDetails={(ord) => {
+          setSelected(ord as any);
+          setStatus(ord.status);
+          setSaveError("");
+        }}
+      />
 
-                    {(() => {
-                      const active = products.filter((p) => p.status === "Active");
-                      const filtered = manualProductSearch.trim()
-                        ? active.filter((p) =>
-                            p.name.toLowerCase().includes(manualProductSearch.toLowerCase()) ||
-                            (p.sku && p.sku.toLowerCase().includes(manualProductSearch.toLowerCase())) ||
-                            (p.color && p.color.toLowerCase().includes(manualProductSearch.toLowerCase()))
-                          )
-                        : active;
+      {/* Dedicated Permanent Delete Order Modal */}
+      <DeleteOrderModal
+        order={deleteModalOrder as LifecycleOrder | null}
+        open={!!deleteModalOrder}
+        onOpenChange={(open) => {
+          if (!open) setDeleteModalOrder(null);
+        }}
+        onDelete={async (targetOrder, reason, note) => {
+          const res = await write({
+            action: "delete-order",
+            id: targetOrder.id,
+            reason,
+            note,
+          });
+          if (res) {
+            setData((curr) =>
+              curr
+                ? {
+                    ...curr,
+                    orders: curr.orders.filter((item) => item.id !== targetOrder.id),
+                  }
+                : curr
+            );
+            setSelectedOrderIds((curr) => curr.filter((id) => id !== targetOrder.id));
+            if (selected?.id === targetOrder.id) {
+              setSelected(null);
+            }
+            toast.success(`Order #${targetOrder.id.slice(0, 8)} deleted permanently`);
+            return true;
+          }
+          return false;
+        }}
+        onCancelInstead={(targetOrder) => {
+          setCancelModalOrder(targetOrder as any);
+          setCancelReason("Customer changed mind / duplicate order");
+          setCancelCustomNote("");
+        }}
+      />
 
-                      if (!filtered.length) {
-                        return (
-                          <div style={{ padding: "8px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, color: "#b91c1c", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <span>No product matching "{manualProductSearch}"</span>
-                            <button
-                              type="button"
-                              onClick={() => setManualProductSearch("")}
-                              style={{ background: "none", border: "none", color: "#b91c1c", fontSize: 11, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}
-                            >
-                              Clear
-                            </button>
-                          </div>
-                        );
-                      }
+      {/* Returns & Refunds Detail Drawer */}
+      <ReturnDetailDrawer
+        returnRequest={selectedReturn}
+        open={!!selectedReturn}
+        busy={busy}
+        onOpenChange={(open) => {
+          if (!open) setSelectedReturn(null);
+        }}
+        onUpdateStatus={async (returnId, status, opts) => {
+          const res = await write({
+            action: "update-return-status",
+            returnId,
+            status,
+            rejectionReason: opts?.rejectionReason,
+            courier: opts?.courier,
+            trackingNumber: opts?.trackingNumber,
+            note: opts?.note,
+          });
+          if (res) {
+            await load();
+            setSelectedReturn((curr) => curr && curr.id === returnId ? {
+              ...curr,
+              returnStatus: status,
+              rejectionReason: opts?.rejectionReason || curr.rejectionReason,
+              courier: opts?.courier || curr.courier,
+              trackingNumber: opts?.trackingNumber || curr.trackingNumber,
+            } : curr);
+          }
+        }}
+        onInspect={async (returnId, inspectionStatus, notes) => {
+          const res = await write({
+            action: "inspect-return",
+            returnId,
+            inspectionStatus,
+            notes,
+          });
+          if (res) {
+            await load();
+            setSelectedReturn((curr) => curr && curr.id === returnId ? {
+              ...curr,
+              inspectionStatus,
+              internalNotes: notes ? (curr.internalNotes ? `${curr.internalNotes}\n[Inspection]: ${notes}` : `[Inspection]: ${notes}`) : curr.internalNotes,
+            } : curr);
+          }
+        }}
+        onRestock={async (returnId, itemIndexes, note, action) => {
+          const res = await write({
+            action: "restock-return-items",
+            returnId,
+            itemIndexes,
+            note,
+            restockAction: action || "restock",
+          });
+          if (res) {
+            await load();
+            setSelectedReturn((curr) => curr && curr.id === returnId ? {
+              ...curr,
+              inventoryAction: (action === "do_not_restock" ? "Do Not Restock" : "Restocked") as any,
+            } : curr);
+          }
+        }}
+        onProcessRefund={async (returnId, refundData) => {
+          const res = await write({
+            action: "process-refund",
+            returnId,
+            ...refundData,
+          });
+          if (res) {
+            await load();
+            setSelectedReturn((curr) => curr && curr.id === returnId ? {
+              ...curr,
+              refundStatus: "Refunded",
+              approvedRefundAmount: refundData.refundAmount,
+              refundMethod: refundData.refundMethod,
+              refundReference: refundData.refundReference,
+              refundAccountTitle: refundData.refundAccountTitle,
+              refundAccountNumber: refundData.refundAccountNumber,
+              refundBankName: refundData.refundBankName,
+              refundedAt: new Date().toISOString(),
+              refundedBy: data?.name || "CSR Agent",
+            } : curr);
+          }
+        }}
+        onAddNote={async (returnId, note) => {
+          const res = await write({
+            action: "add-return-note",
+            returnId,
+            note,
+          });
+          if (res) {
+            await load();
+            setSelectedReturn((curr) => curr && curr.id === returnId ? {
+              ...curr,
+              internalNotes: curr.internalNotes ? `${curr.internalNotes}\n${note}` : note,
+            } : curr);
+          }
+        }}
+        onNavigateToOrder={(orderId) => {
+          setSelectedReturn(null);
+          setSection("orders");
+          setExpandedSection("orders");
+          setOrderMainTab("overview");
+          setOrderSubTab("all");
+          const targetOrd = orders.find((o) => o.id === orderId);
+          if (targetOrd) {
+            setSelected(targetOrd);
+          }
+        }}
+      />
 
-                      return (
-                        <select
-                          value={manualProductChoice}
-                          onChange={(e) => {
-                            setManualProductChoice(e.target.value);
-                            const p = products.find((x) => x.id === e.target.value);
-                            if (p) {
-                              const sizes = sizeOptionsFor(p);
-                              setManualSizeChoice(sizes[0] || "Standard");
-                            }
-                          }}
-                          style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13, height: 40, background: "#ffffff" }}
-                        >
-                          {filtered.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name} · {money(effectivePrice(p))} (Stock: {p.stock || 0})
-                            </option>
-                          ))}
-                        </select>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Size & Quantity Picker */}
-                  <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>Size / Variant</label>
-                      <select
-                        value={manualSizeChoice}
-                        onChange={(e) => setManualSizeChoice(e.target.value)}
-                        style={{ padding: "9px 12px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13.5, height: 42, background: "#ffffff" }}
-                      >
-                        {(() => {
-                          const p = products.find((x) => x.id === manualProductChoice);
-                          const sizes = p ? sizeOptionsFor(p) : ["Standard"];
-                          return sizes.map((s) => (
-                            <option key={s} value={s}>{s}</option>
-                          ));
-                        })()}
-                      </select>
-                    </div>
-
-                    <div style={{ width: 85, display: "flex", flexDirection: "column", gap: 5 }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>Qty</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={manualQtyChoice}
-                        onChange={(e) => setManualQtyChoice(Math.max(1, parseInt(e.target.value) || 1))}
-                        style={{ padding: "9px 8px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 14, fontWeight: 700, textAlign: "center", height: 42, background: "#ffffff" }}
-                      />
-                    </div>
-
-                    <button
-                      type="button"
-                      className="admin-primary"
-                      style={{ padding: "0 20px", fontSize: 13.5, fontWeight: 600, height: 42, borderRadius: 8, background: "#203664", display: "flex", alignItems: "center", gap: 6 }}
-                      onClick={() => {
-                        const p = products.find((x) => x.id === manualProductChoice);
-                        if (!p) return;
-                        const unitPrice = effectivePrice(p);
-                        const existingIdx = manualOrderItems.findIndex((item) => item.id === p.id && item.size === manualSizeChoice);
-                        if (existingIdx !== -1) {
-                          setManualOrderItems((prev) => prev.map((item, idx) => idx === existingIdx ? {
-                            ...item,
-                            qty: item.qty + manualQtyChoice,
-                            totalPrice: (item.qty + manualQtyChoice) * item.unitPrice,
-                          } : item));
-                        } else {
-                          setManualOrderItems((prev) => [
-                            ...prev,
-                            {
-                              id: p.id,
-                              name: p.name,
-                              sku: p.sku || p.id,
-                              image: photo(p),
-                              color: p.color || "",
-                              size: manualSizeChoice,
-                              qty: manualQtyChoice,
-                              unitPrice,
-                              totalPrice: unitPrice * manualQtyChoice,
-                            }
-                          ]);
-                        }
-                        toast.success(`Added ${p.name} (${manualSizeChoice})`);
-                      }}
-                    >
-                      <Plus size={15} /> Add
-                    </button>
-                  </div>
-                </div>
-
-                {/* Added Items List */}
-                <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, minHeight: 140, maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, background: "#ffffff" }}>
-                  {manualOrderItems.length === 0 ? (
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13, padding: "24px 0" }}>
-                      <ShoppingBag size={28} style={{ marginBottom: 6, opacity: 0.5 }} />
-                      <span>No items added yet. Pick a product above and click Add.</span>
-                    </div>
-                  ) : (
-                    manualOrderItems.map((item, idx) => (
-                      <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #f1f5f9" }}>
-                        <img src={item.image} alt={item.name} style={{ width: 38, height: 38, objectFit: "contain", borderRadius: 6, background: "#ffffff", border: "1px solid #e2e8f0" }} />
-                        <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
-                          <div style={{ fontWeight: 600, color: "#0f172a", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
-                          <div style={{ color: "#64748b", fontSize: 12 }}>{item.size} · {item.qty} × {money(item.unitPrice)}</div>
-                        </div>
-                        <div style={{ fontWeight: 700, color: "#0f172a", fontSize: 13.5 }}>{money(item.totalPrice)}</div>
-                        <button
-                          type="button"
-                          onClick={() => setManualOrderItems((prev) => prev.filter((_, i) => i !== idx))}
-                          style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", padding: 4, borderRadius: 4 }}
-                          title="Remove item"
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Price Breakdown */}
-                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", padding: "14px 16px", borderRadius: 10, display: "flex", flexDirection: "column", gap: 8, fontSize: 13.5 }}>
-                  {(() => {
-                    const subtotal = manualOrderItems.reduce((acc, item) => acc + item.totalPrice, 0);
-                    const delivery = Math.max(0, parseInt(manualCustomDelivery) || 0);
-                    const discount = Math.max(0, parseInt(manualCustomDiscount) || 0);
-                    const grandTotal = Math.max(0, subtotal + delivery - discount);
-                    return (
-                      <>
-                        <div style={{ display: "flex", justifyContent: "space-between", color: "#475569" }}>
-                          <span>Items Subtotal:</span>
-                          <b style={{ color: "#0f172a" }}>{money(subtotal)}</b>
-                        </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
-                          <span>Delivery Charges:</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span>Rs.</span>
-                            <input
-                              type="number"
-                              min={0}
-                              value={manualCustomDelivery}
-                              onChange={(e) => setManualCustomDelivery(e.target.value)}
-                              style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13.5, textAlign: "right", background: "#ffffff" }}
-                            />
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#475569" }}>
-                          <span>Discount:</span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span>- Rs.</span>
-                            <input
-                              type="number"
-                              min={0}
-                              value={manualCustomDiscount}
-                              onChange={(e) => setManualCustomDiscount(e.target.value)}
-                              style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13.5, textAlign: "right", background: "#ffffff" }}
-                            />
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#0f172a", fontSize: 15, fontWeight: 800, borderTop: "1.5px solid #cbd5e1", paddingTop: 10, marginTop: 4 }}>
-                          <span>Total COD Amount:</span>
-                          <span style={{ color: "#16a34a", fontSize: 18, fontWeight: 800 }}>{money(grandTotal)}</span>
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
-
-            {/* Dialog Footer Actions */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 24, paddingTop: 18, borderTop: "1px solid #e2e8f0", flexWrap: "wrap", gap: 12 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#334155", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={manualOpenWhatsappAfter}
-                  onChange={(e) => setManualOpenWhatsappAfter(e.target.checked)}
-                  style={{ width: 17, height: 17, accentColor: "#16a34a" }}
-                />
-                <span>Send WhatsApp confirmation message to customer after placing order</span>
-              </label>
-
-              <div style={{ display: "flex", gap: 12, marginLeft: "auto" }}>
-                <button
-                  type="button"
-                  className="admin-secondary"
-                  style={{ padding: "10px 20px", fontSize: 13.5, height: 42, borderRadius: 8 }}
-                  onClick={() => setManualOrderModalOpen(false)}
-                  disabled={busy}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="admin-primary"
-                  disabled={busy || manualOrderItems.length === 0}
-                  style={{ padding: "10px 28px", fontSize: 14, fontWeight: 700, height: 42, borderRadius: 8, background: "#16a34a" }}
-                >
-                  {busy ? "Placing Order…" : "Place Manual Order"}
-                </button>
-              </div>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      {/* Create Return Modal */}
+      <CreateReturnModal
+        open={createReturnModalOpen}
+        orders={orders}
+        existingReturns={returnRequests}
+        busy={busy}
+        onOpenChange={(open) => setCreateReturnModalOpen(open)}
+        onCreateReturn={async (returnData) => {
+          const res = await write({
+            action: "create-return",
+            ...returnData,
+          });
+          if (res) {
+            await load();
+            setCreateReturnModalOpen(false);
+            return true;
+          }
+          return false;
+        }}
+      />
 
       {/* Hidden container that becomes visible during window.print() via @media print */}
       {airwayBillOrders && (

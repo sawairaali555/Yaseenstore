@@ -1,4 +1,4 @@
-# Zeliy role-based access management
+# Cartify role-based access management
 
 ## Delivered components
 
@@ -48,7 +48,7 @@ Built-in role definitions are immutable application policy. `access_roles` store
 6. Reconnect from `/account` after a permitted account change. Banned and removed accounts cannot reconnect. Their own account status and notices remain readable so they can understand the restriction.
 7. Public catalog pages remain readable. Checkout/order actions require an active app account. Restriction/mute blocks checkout and content management; it does not remove read access or moderation-team capabilities.
 
-This does not terminate a person's ChatGPT account or its global sign-in session. All authorization-sensitive Zeliy actions use the revocable app session and fresh database state.
+This does not terminate a person's ChatGPT account or its global sign-in session. All authorization-sensitive Cartify actions use the revocable app session and fresh database state.
 
 ## Database
 

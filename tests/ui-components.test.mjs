@@ -14,7 +14,7 @@ const vite = await createServer({
   configFile: false,
   root,
   resolve: { alias: { "@": root } },
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, ws: false },
 });
 
 after(async () => {
@@ -82,4 +82,13 @@ test("renders sidebar skeletons deterministically", async () => {
 
   assert.equal(first, second);
   assert.match(first, /--skeleton-width:70%/);
+});
+
+test('order progress reflects the saved status and handles cancellation', async () => {
+  const { default: OrderProgress } = await vite.ssrLoadModule('/components/order-progress.tsx');
+  const render = status => renderToStaticMarkup(React.createElement(OrderProgress, { status }));
+  assert.match(render('Pending'), /aria-current="step"[^]*?Placed/);
+  assert.match(render('Delivered'), /aria-current="step"[^]*?Delivered/);
+  assert.doesNotMatch(render('Cancelled'), /aria-current/);
+  assert.match(render('Cancelled'), /Order status: Cancelled/);
 });

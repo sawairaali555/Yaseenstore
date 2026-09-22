@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Zeliy Pakistan | Everyday finds, better prices",
-  description: "Shop fashion, beauty, home and tech in Pakistan. Discover the Zeliy Pakistan sample storefront.",
+  title: "Cartify Pakistan | Everyday finds, better prices",
+  description: "Shop fashion, beauty, home and tech in Pakistan. Discover the Cartify Pakistan sample storefront.",
   other: {
     "codex-preview": "development",
   },

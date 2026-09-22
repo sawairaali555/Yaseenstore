@@ -180,8 +180,9 @@ export const POPULAR_PAKISTAN_CITIES = [
   "Sukkur",
 ];
 
-export function cleanPakistanPhone(raw: string): string {
-  let cleaned = raw.replace(/[^\d+]/g, "").trim();
+export function cleanPakistanPhone(raw?: string | null): string {
+  if (!raw) return "";
+  let cleaned = String(raw).replace(/[^\d+]/g, "").trim();
   if (cleaned.startsWith("+92")) {
     // e.g. +923001234567 -> 03001234567
     cleaned = "0" + cleaned.slice(3);
@@ -196,5 +197,20 @@ export function cleanPakistanPhone(raw: string): string {
 export function isValidPakistanPhone(phone: string): boolean {
   const cleaned = cleanPakistanPhone(phone);
   return /^03\d{9}$/.test(cleaned);
+}
+
+export function getDefaultDeliveryChargeForProvince(
+  province?: string,
+  baseRate = 200
+): number {
+  if (!province) return baseRate;
+  if (
+    province === "Balochistan" ||
+    province === "Azad Jammu & Kashmir" ||
+    province === "Gilgit-Baltistan"
+  ) {
+    return Math.max(250, baseRate + 50);
+  }
+  return baseRate;
 }
 

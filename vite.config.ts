@@ -62,6 +62,20 @@ export default defineConfig(async () => {
         ? { watch: { useFsEvents: false, usePolling: true } }
         : {}),
     },
+    optimizeDeps: {
+      include: [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "react/jsx-dev-runtime",
+        "recharts",
+        "lucide-react",
+        "sonner",
+        "clsx",
+        "tailwind-merge",
+        "class-variance-authority",
+      ],
+    },
     plugins: [
       vinext(),
       sites(),

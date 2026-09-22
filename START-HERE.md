@@ -1,11 +1,11 @@
-# Zeliy Pakistan — open the full source in VS Code
+# Cartify Pakistan — open the full source in VS Code
 
 This archive contains the complete tracked application source and bundled assets from commit 9fdddf7d5ff5182a9c28706283865bbf6ef7391b. It is the existing hosted application, not a newly converted standalone application. No live-site code has been changed for this export.
 
 ## 1. Open the project
 
 1. Install Node.js 22.13 or newer and Visual Studio Code on your computer.
-2. Extract this ZIP. Open the extracted `zeliy-pakistan` folder with VS Code → File → Open Folder.
+2. Extract this ZIP. Open the extracted `cartify-pakistan` folder with VS Code → File → Open Folder.
 3. Choose Terminal → New Terminal. Make sure the terminal is inside the folder containing package.json.
 4. Install the locked dependencies:
 
