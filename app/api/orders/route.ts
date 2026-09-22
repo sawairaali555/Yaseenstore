@@ -39,7 +39,7 @@ const schema = z.object({
   csrNotes: z.string().max(1000).optional(),
   csrHistory: z.array(z.any()).optional(),
   customDelivery: z.number().int().min(0).max(10000).optional(),
-  customDiscount: z.number().int().min(0).max(1000000).optional(),
+  customDiscount: z.number().min(0).max(1000000).optional(),
   discountType: z.enum(['fixed', 'percentage']).optional(),
   deliveryOverride: z.boolean().optional(),
   status: z.string().max(80).optional(),

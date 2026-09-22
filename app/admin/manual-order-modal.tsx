@@ -521,13 +521,16 @@ export default function ManualOrderModal({
         csrConfirmedAt: initialCsrStatus === "Confirmed" ? new Date().toISOString() : undefined,
         status: initialCsrStatus === "Confirmed" ? "Picklist" : "Test order received",
         customDelivery: deliveryChargeAmount,
-        customDiscount: orderDiscountAmount + totalItemDiscounts,
+        customDiscount: discountMode === 'percentage'
+          ? Math.min(100, Math.max(0, parseFloat(discountInput) || 0))
+          : orderDiscountAmount,
         discountType: discountMode,
         deliveryOverride,
         items: orderItems.map((i) => ({
           id: i.id,
           qty: i.qty,
           size: i.size,
+          color: i.color || undefined,
           discount: i.discount || 0,
         })),
       };

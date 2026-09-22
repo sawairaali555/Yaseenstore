@@ -15,7 +15,7 @@
 
 ## Verification
 
-The production build, TypeScript check, and full 37-test suite passed during this refinement. Existing workspace edits were preserved and included in the project checkpoint.
+The production build, TypeScript check, and full test suite passed during this refinement. Regression coverage includes staff percentage discounts after item discounts. Existing workspace edits were preserved and included in the project checkpoint.
 
 ## Remaining Work
 
