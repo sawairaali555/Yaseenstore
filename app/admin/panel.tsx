@@ -2150,11 +2150,15 @@ export default function Admin() {
     );
   }
 
-  function OrderTable({ rows }: { rows: Order[] }) {
-    const copyText = (text: string, label: string) => {
+  function renderOrderTable(rows: Order[]) {
+    const copyText = async (text: string, label: string) => {
       if (!text) return;
-      navigator.clipboard.writeText(text);
-      toast.success(`${label} copied!`);
+      try {
+        await navigator.clipboard.writeText(text);
+        toast.success(`${label} copied!`);
+      } catch {
+        toast.error('Clipboard access is unavailable. Please select and copy the text.');
+      }
     };
 
     const severityStyles: Record<string, { bg: string; color: string; border: string }> = {
@@ -4161,7 +4165,7 @@ export default function Admin() {
                     )}
 
                     {filteredOrders.length || !orders.length ? (
-                      <OrderTable rows={filteredOrders} />
+                      renderOrderTable(filteredOrders)
                     ) : (
                       <div className="admin-empty">
                         <Search />

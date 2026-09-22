@@ -228,67 +228,6 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
   const [newArrival, setNewArrival] = useState(true);
   const [bestSeller, setBestSeller] = useState(false);
 
-  // Load Data on Mount
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [catRes, adminRes] = await Promise.all([
-          fetch("/api/categories"),
-          fetch("/api/admin"),
-        ]);
-        if (catRes.ok) {
-          const catData = (await catRes.json()) as any;
-          if (catData.categories) setCategoryTree(catData.categories);
-        }
-        if (adminRes.ok) {
-          const adminData = (await adminRes.json()) as any;
-          if (adminData.products) setExistingProducts(adminData.products);
-
-          const targetId = initialProductId || new URLSearchParams(location.search).get("id");
-          if (mode === "edit" && targetId) {
-            const found: ManagedProduct | undefined = (adminData.products || []).find(
-              (p: ManagedProduct) => p.id === targetId
-            );
-            if (found) {
-              populateForm(found);
-            } else {
-              toast.error("Product not found");
-            }
-          }
-        }
-      } catch (e: any) {
-        toast.error(e.message || "Failed to load product data");
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-  }, [mode, initialProductId]);
-
-  // Unsaved changes warning
-  useEffect(() => {
-    function handleBeforeUnload(e: BeforeUnloadEvent) {
-      if (isDirty) {
-        e.preventDefault();
-        e.returnValue = "";
-      }
-    }
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [isDirty]);
-
-  // Recommended Size Systems for current category
-  const categoryRecommendations = useMemo(() => {
-    return getRecommendedSizeSystems(category, subcategory);
-  }, [category, subcategory]);
-
-  // Update default size system when category changes
-  useEffect(() => {
-    if (categoryRecommendations.defaultSystemId && selectedSizes.length === 0) {
-      setSelectedSizeType(categoryRecommendations.defaultSystemId);
-    }
-  }, [categoryRecommendations]);
-
   function populateForm(prod: ManagedProduct) {
     setProductId(prod.id);
     setName(prod.name || "");
@@ -420,6 +359,67 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
 
     setIsDirty(false);
   }
+
+  // Load Data on Mount
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [catRes, adminRes] = await Promise.all([
+          fetch("/api/categories"),
+          fetch("/api/admin"),
+        ]);
+        if (catRes.ok) {
+          const catData = (await catRes.json()) as any;
+          if (catData.categories) setCategoryTree(catData.categories);
+        }
+        if (adminRes.ok) {
+          const adminData = (await adminRes.json()) as any;
+          if (adminData.products) setExistingProducts(adminData.products);
+
+          const targetId = initialProductId || new URLSearchParams(location.search).get("id");
+          if (mode === "edit" && targetId) {
+            const found: ManagedProduct | undefined = (adminData.products || []).find(
+              (p: ManagedProduct) => p.id === targetId
+            );
+            if (found) {
+              populateForm(found);
+            } else {
+              toast.error("Product not found");
+            }
+          }
+        }
+      } catch (e: any) {
+        toast.error(e.message || "Failed to load product data");
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, [mode, initialProductId]);
+
+  // Unsaved changes warning
+  useEffect(() => {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
+
+  // Recommended Size Systems for current category
+  const categoryRecommendations = useMemo(() => {
+    return getRecommendedSizeSystems(category, subcategory);
+  }, [category, subcategory]);
+
+  // Update default size system when category changes
+  useEffect(() => {
+    if (categoryRecommendations.defaultSystemId && selectedSizes.length === 0) {
+      setSelectedSizeType(categoryRecommendations.defaultSystemId);
+    }
+  }, [categoryRecommendations]);
 
   // Handle Name change and sync Slug
   function handleNameChange(val: string) {

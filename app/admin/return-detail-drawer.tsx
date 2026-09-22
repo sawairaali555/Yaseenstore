@@ -69,7 +69,12 @@ interface Props {
   onNavigateToOrder?: (orderId: string) => void;
 }
 
-export default function ReturnDetailDrawer({
+export default function ReturnDetailDrawer(props: Props) {
+  if (!props.open || !props.returnRequest) return null;
+  return <ReturnDetailContent {...props} returnRequest={props.returnRequest} key={props.returnRequest.id} />;
+}
+
+function ReturnDetailContent({
   returnRequest,
   open,
   busy = false,
@@ -80,8 +85,7 @@ export default function ReturnDetailDrawer({
   onProcessRefund,
   onAddNote,
   onNavigateToOrder,
-}: Props) {
-  if (!returnRequest) return null;
+}: Omit<Props, 'returnRequest'> & { returnRequest: ReturnRequest }) {
 
   // Local interaction states
   const [activeTab, setActiveTab] = useState<"overview" | "inspection" | "refund" | "timeline" | "notes">("overview");
@@ -1288,4 +1292,3 @@ export default function ReturnDetailDrawer({
     </>
   );
 }
-
