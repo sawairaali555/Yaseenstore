@@ -1,10 +1,12 @@
-import { catalog, categoryTree } from '@/lib/store-data';
+import { catalog, categoryTree, settings } from '@/lib/store-data';
+import { publicStorefrontProduct } from '@/lib/public-storefront';
 import { effectivePrice } from '@/app/catalog';
 import { filterStorefrontProducts, getSizesForColor, getSizeAvailabilityDetails } from '@/lib/inventory-engine';
 import { productImage } from '@/lib/product-image';
 
 export async function GET() {
-  const products = filterStorefrontProducts(await catalog()).map(product => {
+  const publicCatalog = filterStorefrontProducts(await catalog());
+  const products = publicCatalog.map(product => {
     const checkoutOptions = getSizesForColor(product, product.color, false).flatMap(size => {
       const availability = getSizeAvailabilityDetails(product, size, product.color);
       if (!availability.isPurchasable) return [];
@@ -26,5 +28,5 @@ export async function GET() {
       checkoutOptions,
     };
   }).filter(product => product.checkoutOptions.length > 0);
-  return Response.json({ products, categories: await categoryTree() }, { headers: { 'Cache-Control': 'no-store' } });
+  return Response.json({ products, catalog: publicCatalog.map(publicStorefrontProduct), settings: await settings(), categories: await categoryTree() }, { headers: { 'Cache-Control': 'no-store' } });
 }
