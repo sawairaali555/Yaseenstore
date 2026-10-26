@@ -1,5 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-request";
+import { AdminPagination, useAdminPagination } from './pagination';
+import { useEffect, useRef, useState } from "react";
 import {
   LayoutDashboard,
   Package,
@@ -9,6 +11,7 @@ import {
   ExternalLink,
   Plus,
   Search,
+  ArrowLeft,
   ArrowUpRight,
   Banknote,
   CheckCircle2,
@@ -55,6 +58,8 @@ import {
   CheckSquare,
   Minus,
   EyeOff,
+  Info,
+  Heart,
 } from "lucide-react";
 import {
   Sidebar,
@@ -118,8 +123,11 @@ import RemoveColorModal from "./remove-color-modal";
 import ProductEditor from "./products/editor";
 import Logout from "./logout";
 import BannersManager from "./banners";
+import DealCarousels from "./deal-carousels";
+import ThemeEditor from "./theme-editor";
 import ManualOrderModal from "./manual-order-modal";
 import CustomerHistoryDrawer from "./customer-history-drawer";
+import CustomerIntelligence from "./customer-intelligence";
 import OrderHistoryDrawer from "./order-history-drawer";
 import CodSettlementModal from "./cod-settlement-modal";
 import DeleteOrderModal, { DeletionReason } from "./delete-order-modal";
@@ -141,7 +149,9 @@ import {
   isCodSettled,
 } from "@/lib/order-lifecycle";
 import "./seller.css";
-import { getInventoryStatus, InventoryStatus } from "@/lib/inventory-engine";
+import "./refinements.css";
+import { getInventoryStatus, getVariantEffectiveImage, getColorGalleryImages, InventoryStatus } from "@/lib/inventory-engine";
+import { productImage } from "@/lib/product-image";
 import type { CategoryNode } from "@/lib/categories";
 import type { ManagedProduct, Settings } from "@/lib/store-data";
 
@@ -235,10 +245,11 @@ const sections = [
   { id: "orders", label: "Orders", icon: ShoppingBag },
   { id: "products", label: "Products", icon: Package },
   { id: "customers", label: "Customers", icon: Users },
-  { id: "settings", label: "Settings", icon: SettingsIcon },
+  { id: "settings", label: "Store Settings", icon: SettingsIcon },
   { id: "reviews", label: "Reviews", icon: CheckCircle2, hidden: true },
 ];
 export type SettingsSubTab =
+  | "settings_home"
   | "store_settings"
   | "store_setup"
   | "offers"
@@ -247,6 +258,7 @@ export type SettingsSubTab =
   | "theme_setting"
   | "categories";
 export type OrderMainTab = "overview" | "new_csr" | "fulfillment" | "shipping" | "completed" | "issues_returns" | "returns";
+export type CustomerView = "all" | "returning" | "trusted" | "risk" | "analytics";
 export const pipelineSteps = [
   { id: "Pending", label: "Placed", aliases: ["Pending", "Test order received"], icon: Check },
   { id: "Picklist", label: "Picklist", aliases: ["Picklist"], icon: Package },
@@ -254,6 +266,45 @@ export const pipelineSteps = [
   { id: "Shipped", label: "Shipped", aliases: ["Shipped", "Dispatched"], icon: Truck },
   { id: "Delivered", label: "Delivered", aliases: ["Delivered"], icon: CheckCircle2 },
 ];
+const settingsGroups = [
+  {
+    title: "Store Management",
+    cards: [
+      { id: "store_settings", title: "General Settings", description: "Store information and contact details", icon: Store },
+      { id: "theme_setting", title: "Branding", description: "Logo, colors, fonts, and identity", icon: ImageIcon },
+      { id: "store_setup", title: "Domains", description: "Store domains and language settings", icon: Link },
+      { id: "store_setup", title: "Languages & Currency", description: "Regional storefront preferences", icon: Banknote },
+    ],
+  },
+  {
+    title: "Storefront Customization",
+    cards: [
+      { id: "theme_setting", title: "Theme Editor", description: "Customize your storefront appearance", icon: SlidersHorizontal },
+      { id: "theme_setting", title: "Homepage Builder", description: "Manage sections, banners, and content", icon: LayoutDashboard },
+      { id: "theme_setting", title: "Header & Footer", description: "Configure storefront navigation areas", icon: Store },
+      { id: "theme_setting", title: "Navigation", description: "Organize menus and category links", icon: Link },
+      { id: "theme_setting", title: "Product Page Settings", description: "Control product detail presentation", icon: Package },
+    ],
+  },
+  {
+    title: "Orders & Checkout",
+    cards: [
+      { id: "store_setup", title: "Checkout", description: "Cart, order fields, and validation", icon: ShoppingBag },
+      { id: "store_setup", title: "Payments", description: "COD and payment method settings", icon: Banknote },
+      { id: "store_setup", title: "Shipping", description: "Delivery zones, rates, and rules", icon: Truck },
+      { id: "store_settings", title: "Customer Settings", description: "Accounts, trust, and buyer preferences", icon: Users },
+    ],
+  },
+  {
+    title: "Marketing & Advanced",
+    cards: [
+      { id: "offers", title: "SEO & Marketing", description: "Search, campaigns, and growth tools", icon: Search },
+      { id: "info_pages", title: "Policies", description: "Legal pages and customer information", icon: FileText },
+      { id: "store_setup", title: "Integrations", description: "Connect tools and external services", icon: Layers },
+      { id: "store_setup", title: "Advanced Settings", description: "Technical and operational controls", icon: SettingsIcon },
+    ],
+  },
+] as const;
 const statuses = [
   "Pending",
   "Picklist",
@@ -515,8 +566,7 @@ function categoryNamesFromTree(nodes: CategoryNode[] = []) {
 const photo = (p: ManagedProduct) => {
   const img = p.image || (p.images && p.images[0]) || "";
   if (!img) return "/images/placeholder.jpg";
-  if (img.startsWith("/") || img.startsWith("http://") || img.startsWith("https://") || img.startsWith("data:")) return img;
-  return "/images/" + img + ".jpg";
+  return productImage(img);
 };
 const imageUrl = (value: string) =>
   /^https?:\/\//.test(value) ? value : "/images/" + value + ".jpg";
@@ -659,7 +709,7 @@ export default function Admin() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [section, setSection] = useState("overview"),
     [expandedSection, setExpandedSection] = useState<string | null>(null),
-    [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>("store_settings"),
+    [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>("settings_home"),
     [newOfferTitle, setNewOfferTitle] = useState(""),
     [newOfferTagline, setNewOfferTagline] = useState(""),
     [newOfferType, setNewOfferType] = useState<"percentage" | "fixed" | "bundle">("percentage"),
@@ -682,6 +732,13 @@ export default function Admin() {
     [groupStatusFilter, setGroupStatusFilter] = useState(""),
     [stockFilter, setStockFilter] = useState(""),
     [editingProductId, setEditingProductId] = useState<string | null>(null),
+    [importDialogOpen, setImportDialogOpen] = useState(false),
+    [importUrl, setImportUrl] = useState(""),
+    [importBusy, setImportBusy] = useState(false),
+    [importedProduct, setImportedProduct] = useState<ManagedProduct | undefined>(undefined),
+    [csvDialogOpen, setCsvDialogOpen] = useState(false),
+    [csvRows, setCsvRows] = useState<ManagedProduct[]>([]),
+    [csvFileName, setCsvFileName] = useState(""),
     [editing, setEditing] = useState<ManagedProduct | null>(null),
     [addColorSource, setAddColorSource] = useState<ManagedProduct | null>(null),
     [imageEditing, setImageEditing] = useState<ManagedProduct | null>(null),
@@ -699,6 +756,11 @@ export default function Admin() {
     [expandedColorRows, setExpandedColorRows] = useState<Record<string, boolean>>({}),
     [productVariantFilter, setProductVariantFilter] = useState<Record<string, string>>({}),
     [activeActionDropdown, setActiveActionDropdown] = useState<string | null>(null),
+    [expandedVariantLists, setExpandedVariantLists] = useState<Record<string, boolean>>({}),
+    [inlinePriceId, setInlinePriceId] = useState<string | null>(null),
+    [inlinePriceValue, setInlinePriceValue] = useState(""),
+    [inlineColorPriceId, setInlineColorPriceId] = useState<string | null>(null),
+    [inlineColorPriceValue, setInlineColorPriceValue] = useState(""),
     [stockValue, setStockValue] = useState(""),
     [stockValues, setStockValues] = useState<Record<string, string>>({}),
     [stockColorChoice, setStockColorChoice] = useState(""),
@@ -708,8 +770,9 @@ export default function Admin() {
     [offerPriceValue, setOfferPriceValue] = useState(""),
     [offerStartValue, setOfferStartValue] = useState(""),
     [offerEndValue, setOfferEndValue] = useState(""),
-    [priceMode, setPriceMode] = useState<"uniform" | "variant" | "offer">("uniform"),
+    [priceMode, setPriceMode] = useState<"uniform" | "variant" | "offer" | "bundle">("uniform"),
     [variantPrices, setVariantPrices] = useState<Record<string, { price: string; old: string }>>({}),
+    [bundleRows, setBundleRows] = useState<Array<{ id: string; quantity: string; totalPrice: string; promo: string; promoArabic: string }>>([]),
     [bundlePriceValues, setBundlePriceValues] = useState(""),
     [isNew, setIsNew] = useState(false),
     [selectedProductIds, setSelectedProductIds] = useState<string[]>([]),
@@ -731,6 +794,7 @@ export default function Admin() {
     [activeSettingsTab, setActiveSettingsTab] = useState<"all" | "branding" | "shipping" | "support" | "checkout">("all"),
     [orderMainTab, setOrderMainTab] = useState<OrderMainTab>("overview"),
     [orderSubTab, setOrderSubTab] = useState<string>("all"),
+    [customerView, setCustomerView] = useState<CustomerView>("all"),
     [csrOrder, setCsrOrder] = useState<Order | null>(null),
     [csrFilter, setCsrFilter] = useState<string>("all"),
     [csrTemplateTab, setCsrTemplateTab] = useState<"english" | "urdu" | "reminder" | "address">("urdu"),
@@ -907,35 +971,57 @@ export default function Admin() {
       toast.success(`Order ${order.id}: CSR status set to ${newStatus}`);
     }
   }
+  const loadSequence = useRef(0);
+  const writing = useRef(false);
   async function load() {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError("");
     try {
-      const r = await fetch("/api/admin");
+      const r = await adminFetch("/api/admin");
       const d: any = await r.json();
-      if (!r.ok) throw Error(d.error);
+      if (!r.ok) throw Error(d.error || 'Unable to load store data.');
+      if (sequence !== loadSequence.current) return;
       setData(d);
       setConfig(d.settings);
     } catch (e) {
+      if (sequence !== loadSequence.current) return;
       setError(e instanceof Error ? e.message : "Unable to load store data.");
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }
   useEffect(() => {
-    const sec = new URLSearchParams(location.search).get("section");
-    if (sec === "products") {
-      setSection("products");
-      setExpandedSection("products");
-    } else if (sec === "orders") {
-      setSection("orders");
-      setExpandedSection("orders");
-    } else if (sec === "settings") {
-      setSection("settings");
-      setExpandedSection("settings");
+    function syncNavigation() {
+      const params = new URLSearchParams(location.search);
+      const sec = params.get('section') || 'overview';
+      if (![...sections.map(item => item.id), 'new_product', 'edit_product'].includes(sec)) return;
+      setSection(sec);
+      setExpandedSection(['products', 'new_product', 'edit_product', 'reviews'].includes(sec) ? 'products' : ['orders', 'settings'].includes(sec) ? sec : null);
+      setEditingProductId(params.get('id'));
+      const customerTab = params.get('customerTab') as CustomerView | null;
+      if (customerTab && ['all', 'returning', 'trusted', 'risk', 'analytics'].includes(customerTab)) setCustomerView(customerTab);
+      const tab = params.get('tab');
+      if (tab && ['settings_home', 'store_settings', 'store_setup', 'offers', 'coupons', 'info_pages', 'theme_setting', 'categories'].includes(tab)) setSettingsSubTab(tab as SettingsSubTab);
     }
+    syncNavigation();
+    window.addEventListener('popstate', syncNavigation);
     load();
+    return () => { window.removeEventListener('popstate', syncNavigation); ++loadSequence.current; };
   }, []);
+  useEffect(() => {
+    if (!data) return;
+    if ((section === 'settings' && !data.permissions.includes('settings.edit')) || (['orders', 'customers'].includes(section) && !data.permissions.includes('orders.manage'))) {
+      setSection('overview');
+      setExpandedSection(null);
+      history.replaceState(null, '', '/admin');
+      toast.error('Your role does not permit this workspace.');
+    }
+  }, [data?.permissions, section]);
+  useEffect(() => {
+    if (!priceEditing) return;
+    setPriceMode(priceEditing.pricingType === "bundle" || Boolean(priceEditing.bundles?.length) ? "bundle" : "uniform");
+  }, [priceEditing]);
   const categoryOptions = categoryNamesFromTree(data?.categories || []);
   useEffect(() => {
     const toggle = (event: Event) => {
@@ -1011,6 +1097,17 @@ export default function Admin() {
   }
 
   function navigate(s: string, optionsOrStatus?: string | { mainTab?: OrderMainTab; subTab?: string; stockFilter?: string; filter?: string; rtoRisk?: "all" | "normal" | "high"; problem?: boolean }) {
+    const target = ['categories', 'banners'].includes(s) ? 'settings' : s;
+    if (data && ((target === 'settings' && !data.permissions.includes('settings.edit')) || (['orders', 'customers'].includes(target) && !data.permissions.includes('orders.manage')))) {
+      toast.error('Your role does not permit this workspace.');
+      return;
+    }
+    const params = new URLSearchParams({ section: target });
+    if (s === 'categories') params.set('tab', 'categories');
+    if (s === 'banners') params.set('tab', 'theme_setting');
+    if (s === 'settings' && typeof optionsOrStatus === 'string') params.set('tab', optionsOrStatus);
+    if (s === 'settings' && typeof optionsOrStatus !== 'string') params.set('tab', 'settings_home');
+    history.pushState(null, '', '/admin?' + params);
     if (s === "categories") {
       setSection("settings");
       setExpandedSection("settings");
@@ -1026,8 +1123,10 @@ export default function Admin() {
     if (s === "settings") {
       setSection("settings");
       setExpandedSection("settings");
-      if (typeof optionsOrStatus === "string" && ["store_settings", "store_setup", "offers", "coupons", "info_pages", "theme_setting", "categories"].includes(optionsOrStatus)) {
+      if (typeof optionsOrStatus === "string" && ["settings_home", "store_settings", "store_setup", "offers", "coupons", "info_pages", "theme_setting", "categories"].includes(optionsOrStatus)) {
         setSettingsSubTab(optionsOrStatus as any);
+      } else if (typeof optionsOrStatus !== "string") {
+        setSettingsSubTab("settings_home");
       }
       return;
     }
@@ -1091,17 +1190,30 @@ export default function Admin() {
       }
     }
   }
+  function navigateCustomerView(view: CustomerView) {
+    setCustomerView(view);
+    setSection("customers");
+    setExpandedSection("customers");
+    history.pushState(null, "", `/admin?section=customers&customerTab=${encodeURIComponent(view)}`);
+  }
   async function write(payload: unknown) {
+    if (writing.current) return false;
+    writing.current = true;
     setBusy(true);
     setSaveError("");
     try {
-      const r = await fetch("/api/admin", {
+      const r = await adminFetch("/api/admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const d: any = await r.json();
-      if (!r.ok) throw Error(d.error);
+      if (!r.ok) throw Error(d.error || 'Unable to save changes.');
+      const product = (payload as { product?: ManagedProduct }).product;
+      if (product && d.productRevision) {
+        product._revision = d.productRevision;
+        setData(current => current ? { ...current, products: current.products.map(item => item.id === product.id ? { ...item, _revision: d.productRevision } : item) } : current);
+      }
       return d || true;
     } catch (e) {
       const message = e instanceof Error ? e.message : "Unable to save changes";
@@ -1109,16 +1221,138 @@ export default function Admin() {
       toast.error(message);
       return false;
     } finally {
+      writing.current = false;
       setBusy(false);
     }
   }
   function newProduct() {
     setEditingProductId(null);
+    setImportedProduct(undefined);
     navigate("new_product");
+  }
+  async function importListingFromLink() {
+    const url = importUrl.trim();
+    if (!url) {
+      toast.error("Paste a product link first.");
+      return;
+    }
+    setImportBusy(true);
+    try {
+      const response = await adminFetch("/api/import-listing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      const result = await response.json() as { error?: string; name?: string; description?: string; image?: string; images?: string[]; price?: string; sourceUrl?: string };
+      if (!response.ok) throw new Error(result.error || "Unable to import that link.");
+      const imported: ManagedProduct = {
+        id: `imported-${Date.now()}`,
+        name: result.name || "Imported product",
+        description: result.description || "",
+        category: "",
+        subcategory: "",
+        price: Number(result.price) || 0,
+        old: Number(result.price) || 0,
+        image: result.image || "",
+        images: result.images || [],
+        sourceUrl: result.sourceUrl || url,
+        status: "Draft",
+      } as ManagedProduct;
+      setImportedProduct(imported);
+      setImportDialogOpen(false);
+      setImportUrl("");
+      setEditingProductId(null);
+      navigate("new_product");
+      toast.success("Listing imported. Review the details before saving.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to import that link.");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+  function parseCsvLine(line: string) {
+    const values: string[] = [];
+    let value = "";
+    let quoted = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      if (char === '"' && line[i + 1] === '"' && quoted) { value += '"'; i += 1; }
+      else if (char === '"') quoted = !quoted;
+      else if (char === ',' && !quoted) { values.push(value.trim()); value = ""; }
+      else value += char;
+    }
+    values.push(value.trim());
+    return values;
+  }
+  function parseCsv(text: string) {
+    const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim());
+    if (lines.length < 2) throw new Error("CSV must include a header row and at least one product row.");
+    const headers = parseCsvLine(lines[0]).map((header) => header.toLowerCase().replace(/\s+/g, "_").trim());
+    if (!headers.includes("name") || !headers.includes("category") || !headers.includes("price")) {
+      throw new Error("CSV headers must include: name, category, price. Optional: subcategory, old, sku, description, image, stock, status.");
+    }
+    return lines.slice(1).map((line, index) => {
+      const values = parseCsvLine(line);
+      const row = Object.fromEntries(headers.map((header, position) => [header, values[position] || ""]));
+      const name = row.name?.trim();
+      const category = row.category?.trim();
+      const price = Number(row.price);
+      if (!name || !category || !Number.isFinite(price) || price <= 0) throw new Error(`Row ${index + 2}: name, category and a valid price are required.`);
+      const id = `${name.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-") || "product"}-${Date.now()}-${index}`;
+      return {
+        id,
+        name,
+        category,
+        subcategory: row.subcategory?.trim() || "General",
+        description: row.description?.trim() || "",
+        price,
+        old: Number(row.old) > 0 ? Number(row.old) : price,
+        sku: row.sku?.trim() || undefined,
+        image: row.image?.trim() || "",
+        images: row.image?.trim() ? [row.image.trim()] : [],
+        stock: Number.isFinite(Number(row.stock)) && Number(row.stock) >= 0 ? Math.floor(Number(row.stock)) : 0,
+        status: row.status?.toLowerCase() === "active" ? "Active" : "Draft",
+      } as ManagedProduct;
+    });
+  }
+  async function readCsv(file: File | undefined) {
+    if (!file) return;
+    try {
+      const rows = parseCsv(await file.text());
+      setCsvRows(rows);
+      setCsvFileName(file.name);
+      toast.success(`${rows.length} product${rows.length === 1 ? "" : "s"} ready to import.`);
+    } catch (error) {
+      setCsvRows([]);
+      setCsvFileName("");
+      toast.error(error instanceof Error ? error.message : "Unable to read CSV.");
+    }
+  }
+  async function importCsvRows() {
+    if (!csvRows.length || importBusy) return;
+    setImportBusy(true);
+    const imported: ManagedProduct[] = [];
+    try {
+      for (const product of csvRows) {
+        const result = await write({ action: "product", product });
+        if (!result) throw new Error(`Could not import ${product.name}.`);
+        imported.push(product);
+      }
+      setData((current) => current ? { ...current, products: [...current.products, ...imported] } : current);
+      setCsvDialogOpen(false);
+      setCsvRows([]);
+      setCsvFileName("");
+      toast.success(`${imported.length} product${imported.length === 1 ? "" : "s"} imported as drafts.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "CSV import failed.");
+    } finally {
+      setImportBusy(false);
+    }
   }
   function editProduct(productId: string) {
     setEditingProductId(productId);
     navigate("edit_product");
+    history.replaceState(null, '', `/admin?section=edit_product&id=${encodeURIComponent(productId)}`);
   }
   async function deleteProducts(ids: string[]) {
     const uniqueIds = Array.from(new Set(ids)).filter(Boolean);
@@ -1128,6 +1362,8 @@ export default function Admin() {
     for (const id of uniqueIds) {
       const ok = await write({ action: "delete-product", id });
       if (!ok) return;
+      setData(current => current ? { ...current, products: current.products.filter(item => item.id !== id) } : current);
+      setSelectedProductIds(current => current.filter(item => item !== id));
     }
     setData((current) =>
       current
@@ -1141,12 +1377,29 @@ export default function Admin() {
     toast.success(uniqueIds.length === 1 ? "Product deleted" : "Products deleted");
   }
 
+  async function duplicateProduct(product: ManagedProduct) {
+    if (busy) return;
+    const id = `${product.id}-copy-${Date.now()}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 100);
+    const copy: ManagedProduct = {
+      ...structuredClone(product),
+      id,
+      name: `${product.name} (Copy)`,
+      sku: product.sku ? `${product.sku}-COPY` : undefined,
+      status: "Draft",
+      variants: product.variants?.map((variant) => ({ ...variant, id: `${variant.id}-copy-${Date.now()}` })),
+    };
+    if (await write({ action: "product", product: copy })) {
+      await load();
+      toast.success("Product duplicated as draft");
+    }
+  }
+
   async function saveVariantGroupStatus(product: ManagedProduct, status: "Active" | "Draft") {
     const groupId = product.listingGroup || product.id;
     const groupItems = (data?.products || []).filter((item) => (item.listingGroup || item.id) === groupId);
     for (const item of groupItems) {
       const next = { ...item, status };
-      await write({ action: "product", product: next });
+      if (!(await write({ action: "product", product: next }))) { await load(); return; }
     }
     await load();
     toast.success(`Main & all colour variants ${status === "Active" ? "activated" : "deactivated"}`);
@@ -1201,6 +1454,18 @@ export default function Admin() {
       return false;
     } else {
       return await saveProductStatus(variant, status);
+    }
+  }
+
+  async function saveSingleVariantStatus(parent: ManagedProduct, variant: ProductVariant, status: "Active" | "Draft") {
+    if (busy || !parent.variants?.length) return;
+    const updatedProduct = {
+      ...parent,
+      variants: parent.variants.map((item) => item.id === variant.id ? { ...item, status } : item),
+    };
+    if (await write({ action: "product", product: updatedProduct })) {
+      await load();
+      toast.success(`Variant set to ${status}`);
     }
   }
 
@@ -1291,6 +1556,44 @@ export default function Admin() {
         await load();
         toast.success("Stock updated");
       }
+    }
+  }
+  async function saveInlineProductPrice(product: ManagedProduct) {
+    const price = Math.max(0, Math.round(Number(inlinePriceValue)));
+    if (!Number.isFinite(price) || !price || busy) return;
+    if (await write({ action: "product", product: { ...product, price } })) {
+      await load();
+      setInlinePriceId(null);
+      toast.success("Price updated");
+    }
+  }
+  async function saveInlineColorPrice(parent: ManagedProduct, colorVariant: ManagedProduct) {
+    const price = Math.max(0, Math.round(Number(inlineColorPriceValue)));
+    if (!Number.isFinite(price) || !price || busy) return;
+    const colorName = (colorVariant.color || "").trim().toLowerCase();
+    if (parent.variants?.length) {
+      const updatedProduct = {
+        ...parent,
+        variants: parent.variants.map((variant) =>
+          (variant.color || "").trim().toLowerCase() === colorName ? { ...variant, price } : variant
+        ),
+      };
+      if (await write({ action: "product", product: updatedProduct })) {
+        await load();
+        setInlineColorPriceId(null);
+        toast.success(`${colorVariant.color} price updated`);
+      }
+      return;
+    }
+    const childProduct = products.find((product) => product.id === colorVariant.id);
+    if (!childProduct) {
+      toast.error(`Could not find the ${colorVariant.color || "colour"} variant to update`);
+      return;
+    }
+    if (await write({ action: "product", product: { ...childProduct, price } })) {
+      await load();
+      setInlineColorPriceId(null);
+      toast.success(`${colorVariant.color || "Colour"} price updated`);
     }
   }
   const orders = data?.orders || [];
@@ -1546,6 +1849,7 @@ export default function Admin() {
 
     return true;
   });
+  const orderPage = useAdminPagination(filteredOrders);
   const filteredProducts = products.filter((p) => {
     const matchesStatus = filter === "All statuses" || p.status === filter;
     const matchesCategory = !categoryFilter || p.category.toLowerCase() === categoryFilter.toLowerCase();
@@ -1573,6 +1877,7 @@ export default function Admin() {
           colorHex?: string;
           images: string[];
           stock: number;
+          price?: number;
           sku?: string;
           status?: string;
           sizes: string[];
@@ -1595,6 +1900,7 @@ export default function Admin() {
             colorHex: v.colorHex,
             images: v.images && v.images.length ? v.images : (v.image ? [v.image] : []),
             stock: vStock,
+            price: v.price,
             sku: v.sku,
             status: v.status || "Active",
             sizes,
@@ -1622,9 +1928,10 @@ export default function Admin() {
           name: `${product.name} · ${c.color}`,
           color: c.color,
           colorHex: c.colorHex,
+          price: c.price,
           sku: c.sku || `${product.sku || product.id}-${c.color.toUpperCase()}`,
-          image: c.images[0] || product.image,
-          images: c.images,
+          image: getVariantEffectiveImage(product, null, c.color).url || product.image,
+          images: getColorGalleryImages(product, c.color),
           stock: c.stock,
           status: c.status || product.status,
           sizes: c.sizes,
@@ -1752,6 +2059,7 @@ export default function Admin() {
       return map;
     }, new Map<string, ManagedProduct>()).values(),
   );
+  const productPage = useAdminPagination(productRows, 20);
   const productStats = {
     total: productRows.length,
     active: productRows.filter((product) => product.status === "Active").length,
@@ -1759,28 +2067,6 @@ export default function Admin() {
     lowStock: productRows.filter((product) => getInventoryStatus(product as any) === "Low Stock").length,
     outOfStock: productRows.filter((product) => getInventoryStatus(product as any) === "Out of Stock").length,
   };
-  function BarcodeSVG({ value, height = 40 }: { value: string; height?: number }) {
-    const bars: number[] = [];
-    bars.push(2, 1, 2, 1);
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i);
-      bars.push((code % 3) + 1, ((code >> 1) % 2) + 1, ((code >> 2) % 3) + 1, 1);
-    }
-    bars.push(2, 1, 2, 2);
-
-    let currentX = 0;
-    return (
-      <svg viewBox={`0 0 260 ${height}`} width="100%" height={height} preserveAspectRatio="none" style={{ display: "block" }}>
-        {bars.map((barWidth, idx) => {
-          const isBlack = idx % 2 === 0;
-          const x = currentX;
-          currentX += barWidth * 2.2;
-          if (!isBlack) return null;
-          return <rect key={idx} x={x} y={0} width={barWidth * 1.8} height={height} fill="#000000" />;
-        })}
-      </svg>
-    );
-  }
 
   function AirwayBillSlip({
     order,
@@ -1834,7 +2120,7 @@ export default function Admin() {
             </span>
           </div>
           <div style={{ maxWidth: 260, margin: "0 auto" }}>
-            <BarcodeSVG value={trk} height={36} />
+            <strong>{trk}</strong>
           </div>
           <div className="tracking-code">CN: {trk}</div>
         </div>
@@ -2186,6 +2472,13 @@ export default function Admin() {
           const trackingUrl = getPakistanCourierTrackingUrl(o.details.courier, o.details.trackingNumber);
           const custProfile = analyzeCustomerHistory(o.details.phone, orders as LifecycleOrder[], o.id);
           const isFirstOrder = custProfile.totalOrders <= 1;
+          const customerBadge = custProfile.totalOrders <= 1
+            ? { label: "New Buyer", tone: "new" }
+            : custProfile.returnedOrders > 0 || custProfile.cancelledOrders > 1
+              ? { label: "Review Required", tone: "risk" }
+              : custProfile.deliverySuccessRate >= 80 && custProfile.deliveredOrders >= 2
+                ? { label: "Trusted Buyer", tone: "trusted" }
+                : { label: "Returning Buyer", tone: "returning" };
           const exceptions = evaluateOrderNeedsAttention(o as LifecycleOrder, orders as LifecycleOrder[], products);
           const duplicateCheck = detectDuplicateOrder(o as LifecycleOrder, orders as LifecycleOrder[]);
           const nextAction = getNextOrderAction(o as LifecycleOrder, data?.role);
@@ -2325,6 +2618,7 @@ export default function Admin() {
                     <div className="order-customer-name">
                       <User size={13} style={{ color: "#64748b" }} />
                       <span>{o.details.name}</span>
+                      <span className={`customer-order-badge ${customerBadge.tone}`}><i />{customerBadge.label}</span>
                     </div>
 
                     <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -2970,6 +3264,8 @@ export default function Admin() {
     section === "settings"
       ? settingsSubTab === "store_settings"
         ? "Store Settings"
+        : settingsSubTab === "settings_home"
+          ? "Store Settings"
         : settingsSubTab === "store_setup"
           ? "Store Setup"
           : settingsSubTab === "offers"
@@ -3019,7 +3315,8 @@ export default function Admin() {
                 const isSettings = s.id === "settings";
                 const isProducts = s.id === "products";
                 const isOrders = s.id === "orders";
-                const hasSubmenu = isSettings || isProducts || isOrders;
+                const isCustomers = s.id === "customers";
+                const hasSubmenu = isSettings || isProducts || isOrders || isCustomers;
                 const isExpanded = expandedSection === s.id;
                 const isCurrentActive = section === s.id || (isProducts && section === "reviews");
 
@@ -3104,6 +3401,7 @@ export default function Admin() {
                           }}
                         />
                       )}
+                      {isCustomers && <ChevronDown className={`admin-submenu-chevron ${isExpanded ? "expanded" : ""}`} size={14} style={{ marginLeft: "auto" }} />}
                     </SidebarMenuButton>
 
                     {isProducts && (
@@ -3129,15 +3427,6 @@ export default function Admin() {
                               }}
                             >
                               <span>Add My Product</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setExpandedSection("products");
-                                navigate("products");
-                              }}
-                            >
-                              <span>Dropship catalog</span>
                             </button>
                             <button
                               type="button"
@@ -3274,21 +3563,22 @@ export default function Admin() {
                       </div>
                     )}
 
+                    {isCustomers && (
+                      <div className={`admin-accordion-collapse ${isExpanded ? "expanded" : ""}`}>
+                        <div className="admin-accordion-inner">
+                          <div className="admin-product-submenu">
+                            {([['all', 'All Customers'], ['returning', 'Returning Buyers'], ['trusted', 'Trusted Buyers'], ['risk', 'High-Risk Buyers'], ['analytics', 'Customer Analytics']] as [CustomerView, string][]).map(([id, label]) => (
+                              <button key={id} type="button" className={section === "customers" && customerView === id ? "active" : ""} onClick={() => navigateCustomerView(id)}><span>{label}</span></button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     {isSettings && (
                       <div className={`admin-accordion-collapse ${isExpanded ? "expanded" : ""}`}>
                         <div className="admin-accordion-inner">
                           <div className="admin-settings-submenu">
-                            <button
-                              type="button"
-                              className={section === "settings" && settingsSubTab === "store_settings" ? "active" : ""}
-                              onClick={() => {
-                                setExpandedSection("settings");
-                                setSection("settings");
-                                setSettingsSubTab("store_settings");
-                              }}
-                            >
-                              <span>Store Settings</span>
-                            </button>
                             <button
                               type="button"
                               className={section === "settings" && settingsSubTab === "store_setup" ? "active" : ""}
@@ -3367,6 +3657,10 @@ export default function Admin() {
           <a className="admin-visit" href="/admin/team">
             <ShieldCheck size={18} />
             Team & access
+          </a>
+          <a className="admin-visit" href="/admin/your-stores">
+            <Store size={18} />
+            Your Stores
           </a>
           <div className="admin-sidebar-note">
             <ShieldCheck size={21} />
@@ -3482,7 +3776,8 @@ export default function Admin() {
           <div
             className={
               "admin-heading " +
-              (section === "overview" ? "seller-dashboard-heading" : "")
+              (section === "overview" ? "seller-dashboard-heading" : "") +
+              (section === "settings" && settingsSubTab === "settings_home" ? " settings-home-page-heading" : "")
             }
           >
             <div>
@@ -3498,9 +3793,11 @@ export default function Admin() {
                       : section === "reviews"
                         ? "Add customer reviews manually and manage approval status."
                       : section === "customers"
-                        ? "Customer details from your saved test orders."
+                        ? "Customer details from saved orders."
                       : section === "settings"
-                        ? settingsSubTab === "store_settings"
+                        ? settingsSubTab === "settings_home"
+                          ? "Choose a workspace to manage your storefront and business preferences."
+                          : settingsSubTab === "store_settings"
                           ? "Manage store branding, custom logo, tagline, and customer support contact details."
                           : settingsSubTab === "store_setup"
                             ? "Configure Pakistan delivery charges, free delivery threshold, and Cash on Delivery payment rules."
@@ -3512,7 +3809,7 @@ export default function Admin() {
                                   ? "Edit customer service policies, About Us, Shipping policy, Return policy, and Terms."
                                   : settingsSubTab === "theme_setting"
                                     ? "Manage hero banner carousel slides, autoplay speed, and promotional banner cards."
-                                    : "Organize storefront navigation menus and product category taxonomy."
+                          : "Organize storefront navigation menus and product category taxonomy."
                         : "Manage store settings."}
               </p>
             </div>
@@ -3544,6 +3841,28 @@ export default function Admin() {
                 >
                   <Plus size={17} />
                   Add product
+                </button>
+              )}
+              {["overview", "products"].includes(section) && (
+                <button
+                  className="admin-secondary"
+                  onClick={() => setImportDialogOpen(true)}
+                  disabled={!data || importBusy}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+                >
+                  <Link size={16} />
+                  Import from link
+                </button>
+              )}
+              {["overview", "products"].includes(section) && (
+                <button
+                  className="admin-secondary"
+                  onClick={() => setCsvDialogOpen(true)}
+                  disabled={!data || importBusy}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+                >
+                  <Upload size={16} />
+                  Import CSV
                 </button>
               )}
             </div>
@@ -3923,7 +4242,7 @@ export default function Admin() {
                           type="button"
                           className="admin-secondary"
                           style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", fontSize: 12, fontWeight: 600 }}
-                          onClick={() => exportOrdersToCSV((filteredOrders.length ? filteredOrders : orders) as LifecycleOrder[])}
+                          onClick={() => exportOrdersToCSV(filteredOrders as LifecycleOrder[])}
                           title="Export displayed orders to Excel / CSV"
                         >
                           <FileText size={14} /> Export CSV
@@ -4045,7 +4364,7 @@ export default function Admin() {
                                     note: "Bulk CSR Verified",
                                     agent: data?.name || "CSR Agent",
                                   };
-                                  await write({
+                                  const saved = await write({
                                     action: "order",
                                     id,
                                     csrStatus: "Confirmed",
@@ -4053,6 +4372,7 @@ export default function Admin() {
                                     csrAgent: data?.name || "CSR Agent",
                                     csrHistory: [historyEntry, ...(target.details.csrHistory || [])],
                                   });
+                                  if (!saved) { await load(); return; }
                                 }
                               }
                               setData((curr) => curr ? {
@@ -4080,7 +4400,7 @@ export default function Admin() {
                             disabled={busy}
                             onClick={async () => {
                               for (const id of selectedOrderIds) {
-                                await write({ action: "order", id, status: "Picklist" });
+                                if (!(await write({ action: "order", id, status: "Picklist" }))) { await load(); return; }
                               }
                               setData((curr) => curr ? {
                                 ...curr,
@@ -4110,7 +4430,7 @@ export default function Admin() {
                             disabled={busy}
                             onClick={async () => {
                               for (const id of selectedOrderIds) {
-                                await write({ action: "order", id, status: "Shipped" });
+                                if (!(await write({ action: "order", id, status: "Shipped" }))) { await load(); return; }
                               }
                               setData((curr) => curr ? {
                                 ...curr,
@@ -4144,7 +4464,7 @@ export default function Admin() {
                               onClick={async () => {
                                 if (window.confirm(`Super Admin: Are you sure you want to permanently delete ${selectedOrderIds.length} selected orders? This cannot be undone and will restore stock.`)) {
                                   const idsToDelete = [...selectedOrderIds];
-                                  await write({ action: "delete-order", id: idsToDelete });
+                                  if (!(await write({ action: "delete-order", id: idsToDelete }))) return;
                                   setData((curr) => curr ? {
                                     ...curr,
                                     orders: curr.orders.filter((o) => !idsToDelete.includes(o.id))
@@ -4165,7 +4485,7 @@ export default function Admin() {
                     )}
 
                     {filteredOrders.length || !orders.length ? (
-                      renderOrderTable(filteredOrders)
+                      renderOrderTable(orderPage.rows)
                     ) : (
                       <div className="admin-empty">
                         <Search />
@@ -4189,8 +4509,8 @@ export default function Admin() {
                       </div>
                     )}
                     <div className="admin-table-foot">
-                      Showing {filteredOrders.length} of {orders.length} orders
-                      · Latest 1,000 orders
+                      <AdminPagination {...orderPage} />
+                      {orders.length >= 1000 && <span>Only the latest 1,000 orders are available in this view.</span>}
                     </div>
                   </>
                 )}
@@ -4198,7 +4518,7 @@ export default function Admin() {
             )}
                 {section === "new_product" && (
                   <div className="admin-card" style={{ padding: 0, background: "transparent", border: 0, boxShadow: "none" }}>
-                    <ProductEditor mode="create" />
+                    <ProductEditor mode="create" initialProduct={importedProduct} />
                   </div>
                 )}
                 {section === "edit_product" && (
@@ -4240,12 +4560,19 @@ export default function Admin() {
                       />
                     </div>
                     <div className="product-bulk-bar">
-                      <label><input type="checkbox" checked={productRows.length > 0 && productRows.every((p) => selectedProductIds.includes(p.id))} onChange={(event) => setSelectedProductIds(event.target.checked ? Array.from(new Set([...selectedProductIds, ...productRows.map((p) => p.id)])) : selectedProductIds.filter((id) => !productRows.some((p) => p.id === id)))} /> Select visible products</label>
+                      <label><input type="checkbox" checked={productPage.rows.length > 0 && productPage.rows.every((p) => selectedProductIds.includes(p.id))} onChange={(event) => setSelectedProductIds(event.target.checked ? Array.from(new Set([...selectedProductIds, ...productPage.rows.map((p) => p.id)])) : selectedProductIds.filter((id) => !productPage.rows.some((p) => p.id === id)))} /> Select visible products</label>
                       <span>{selectedProductIds.length} selected</span>
                       <button type="button" className="product-delete-bulk" disabled={!selectedProductIds.length || busy} onClick={() => deleteProducts(selectedProductIds)}><Trash2 size={14} /> Delete selected</button>
                     </div>
+                    <div className="products-table-head" aria-hidden="true">
+                      <span>Product Info</span>
+                      <span>Price</span>
+                      <span>Stock <Info size={13} /></span>
+                      <span>Active</span>
+                      <span>Actions</span>
+                    </div>
                     <div className="product-groups-list">
-                      {productRows.map((p) => {
+                      {productPage.rows.map((p) => {
                         const isSelected = selectedProductIds.includes(p.id);
                         const colorsList = colorVariantsFor(p);
                         const hasVariants = colorsList.length > 0;
@@ -4291,9 +4618,15 @@ export default function Admin() {
                         ).length;
 
                         const currentFilter = productVariantFilter[p.id] || "all";
+                        const showAllVariants = expandedVariantLists[p.id] ?? false;
+                        const visibleColors = showAllVariants ? colorsList : colorsList.slice(0, 3);
+                        const hiddenVariantCount = Math.max(0, colorsList.length - visibleColors.length);
 
                         return (
-                          <div className="product-row-wrapper" key={p.id}>
+                          <div
+                            className={`product-row-wrapper ${activeActionDropdown === p.id ? "has-open-action-menu" : ""}`}
+                            key={p.id}
+                          >
                             {/* Clean Compact Header Card */}
                             <div className="product-header-card">
                               <div className="product-header-left">
@@ -4327,9 +4660,21 @@ export default function Admin() {
                                   <h3 className="product-header-title">{p.name}</h3>
                                   <div className="product-header-meta">
                                     <span className="product-sku-pill">
-                                      SKU: {p.sku || p.id}
+                                      ID: {p.id}
                                     </span>
-                                    <span>•</span>
+                                    <button
+                                      type="button"
+                                      className="copy-product-id"
+                                      title="Copy product ID"
+                                      aria-label="Copy product ID"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        navigator.clipboard?.writeText(p.id);
+                                        toast.success("Product ID copied");
+                                      }}
+                                    >
+                                      <Copy size={11} />
+                                    </button>
                                     {hasVariants ? (
                                       <span>
                                         <b>{colorsList.length}</b> {colorsList.length === 1 ? "Color" : "Colors"} • <b>{distinctSizes.size > 0 ? distinctSizes.size : 1}</b> {distinctSizes.size === 1 ? "Size" : "Sizes"} • <b>{allVariants.length > 0 ? allVariants.length : colorsList.length}</b> Variants
@@ -4337,6 +4682,7 @@ export default function Admin() {
                                     ) : (
                                       <span style={{ color: "#64748b" }}>Simple Product (No variants)</span>
                                     )}
+                                    <span className="product-performance"><Eye size={11} /> {p.soldCount || "0"} <Heart size={11} /> {p.reviews?.length || 0}</span>
                                   </div>
                                 </div>
                               </div>
@@ -4345,8 +4691,36 @@ export default function Admin() {
                               <div className="product-header-center">
                                 {/* Price */}
                                 <div className="product-price-box">
+                                  {inlinePriceId === p.id ? (
+                                    <input
+                                      className="inline-product-price-input"
+                                      type="number"
+                                      min="1"
+                                      autoFocus
+                                      value={inlinePriceValue}
+                                      onChange={(event) => setInlinePriceValue(event.target.value)}
+                                      onBlur={() => void saveInlineProductPrice(p)}
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") event.currentTarget.blur();
+                                        if (event.key === "Escape") setInlinePriceId(null);
+                                      }}
+                                      aria-label={`Edit price for ${p.name}`}
+                                    />
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="inline-price-button"
+                                      onClick={() => {
+                                        setInlinePriceId(p.id);
+                                        setInlinePriceValue(String(p.price || ""));
+                                      }}
+                                      title="Edit price"
+                                    >
+                                      <span className="product-price-main">{money(p.price)}</span>
+                                      <Pencil size={11} />
+                                    </button>
+                                  )}
                                   <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-                                    <span className="product-price-main">{money(p.price)}</span>
                                     {p.old > p.price && (
                                       <span className="product-price-old">{money(p.old)}</span>
                                     )}
@@ -4385,6 +4759,19 @@ export default function Admin() {
                                 </div>
                               </div>
 
+                              <div className="product-active-cell">
+                                <button
+                                  type="button"
+                                  className={`catalog-status-toggle ${p.status === "Active" ? "is-active" : ""}`}
+                                  onClick={() => saveVariantGroupStatus(p, p.status === "Active" ? "Draft" : "Active")}
+                                  aria-label={`${p.status === "Active" ? "Deactivate" : "Activate"} ${p.name}`}
+                                  aria-pressed={p.status === "Active"}
+                                  disabled={busy}
+                                >
+                                  <span />
+                                </button>
+                              </div>
+
                               {/* Unified Right Actions */}
                               <div className="product-header-actions">
                                 {/* Edit Product */}
@@ -4396,7 +4783,7 @@ export default function Admin() {
                                   }}
                                 >
                                   <Pencil size={13} />
-                                  Edit Product
+                                  Edit
                                 </button>
 
                                 {/* Primary Manage Inventory */}
@@ -4443,6 +4830,67 @@ export default function Admin() {
                                         onClick={(e) => e.stopPropagation()}
                                         onMouseLeave={() => setActiveActionDropdown(null)}
                                       >
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item"
+                                          role="menuitem"
+                                          onClick={() => window.open(`/product/${p.id}`, "_blank", "noopener,noreferrer")}
+                                        >
+                                          <Eye size={14} style={{ color: "#2563eb" }} />
+                                          View product
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            setActiveActionDropdown(null);
+                                            void duplicateProduct(p);
+                                          }}
+                                        >
+                                          <Copy size={14} style={{ color: "#2563eb" }} />
+                                          Duplicate product
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            setActiveActionDropdown(null);
+                                            setPriceMode(p.pricingType === "bundle" || Boolean(p.bundles?.length) ? "bundle" : "uniform");
+                                            setPriceValue(String(p.price || ""));
+                                            setOriginalPriceValue(String(p.old || p.price || ""));
+                                            setCostPriceValue(String(p.costPrice || ""));
+                                            setOfferPriceValue(String(p.offerPrice || ""));
+                                            setOfferStartValue(p.offerStart || "");
+                                            setOfferEndValue(p.offerEnd || "");
+                                            setBundleRows((p.bundles || []).length
+                                              ? p.bundles!.map((bundle, index) => ({ id: bundle.id || `bundle-${index}`, quantity: String(bundle.quantity), totalPrice: String(bundle.price), promo: bundle.content || "", promoArabic: bundle.contentArabic || "" }))
+                                              : [{ id: `bundle-${Date.now()}`, quantity: "1", totalPrice: String(p.price || ""), promo: "", promoArabic: "" }]);
+                                            setVariantPrices(Object.fromEntries((p.variants || []).map((variant) => [variant.id, { price: String(variant.price || p.price || ""), old: String((variant as any).old || p.old || p.price || "") }])));
+                                            setPriceEditing(p);
+                                          }}
+                                        >
+                                          <Pencil size={14} style={{ color: "#6254ff" }} />
+                                          Update pricing
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          className="product-dropdown-item"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            setActiveActionDropdown(null);
+                                            setInventoryModalProduct(p);
+                                            setInventoryModalTargetColor(null);
+                                          }}
+                                        >
+                                          <Layers size={14} style={{ color: "#2563eb" }} />
+                                          Manage inventory
+                                        </button>
+
                                         <button
                                           type="button"
                                           className="product-dropdown-item"
@@ -4547,10 +4995,10 @@ export default function Admin() {
                             {/* Expandable Color Accordions Area */}
                             {hasVariants && (
                               <div className="product-variants-area">
-                                {colorsList.map((variant) => {
+                                {visibleColors.map((variant) => {
                                   const vColorName = variant.color || variant.name || "Default";
                                   const colorKey = `${p.id}:${vColorName}`;
-                                  const isExpanded = expandedColorRows[colorKey] ?? true; // expanded by default for instant visibility
+                                  const isExpanded = expandedColorRows[colorKey] ?? false;
 
                                   // Filter size variants of this color based on selected chip filter
                                   const colorVariants = (p.variants || []).filter(
@@ -4589,6 +5037,11 @@ export default function Admin() {
                                         }
                                       >
                                         <div className="color-header-left">
+                                          <img className="variant-row-thumbnail" src={photo(variant as ManagedProduct)} alt={`${vColorName} variant`} />
+                                          <div className="variant-row-info">
+                                            <span className="variant-row-name">{vColorName}{variant.sizes?.[0] ? ` / ${variant.sizes[0]}` : ""}</span>
+                                            <span className="variant-row-sku">Seller SKU: {variant.sku || `${p.sku || p.id}-${vColorName}`}</span>
+                                          </div>
                                           <span
                                             className="color-swatch-circle"
                                             style={{
@@ -4602,12 +5055,58 @@ export default function Admin() {
                                             }}
                                           />
                                           <span className="color-name-heading">{vColorName}</span>
-                                          <span className="color-summary-tag">
-                                            {colorVariants.length > 0 ? `${colorVariants.length} Sizes` : "1 Size"} • {colorTotalStock} units • {colorStatus}
-                                          </span>
                                         </div>
 
                                         <div className="color-header-right" onClick={(e) => e.stopPropagation()}>
+                                          <div className="variant-row-price">
+                                            {inlineColorPriceId === colorKey ? (
+                                              <input
+                                                className="inline-color-price-input"
+                                                type="number"
+                                                min="1"
+                                                autoFocus
+                                                value={inlineColorPriceValue}
+                                                onChange={(event) => setInlineColorPriceValue(event.target.value)}
+                                                onKeyDown={(event) => {
+                                                  if (event.key === "Enter") {
+                                                    event.preventDefault();
+                                                    void saveInlineColorPrice(p, variant);
+                                                  }
+                                                  if (event.key === "Escape") {
+                                                    event.preventDefault();
+                                                    setInlineColorPriceId(null);
+                                                  }
+                                                }}
+                                                onBlur={() => setInlineColorPriceId(null)}
+                                                aria-label={`Edit ${vColorName} price`}
+                                                title="Press Enter to save or Escape to cancel"
+                                              />
+                                            ) : (
+                                              <>
+                                                <b>{money(variant.price ?? p.price)}</b>
+                                                {(variant.old || p.old) > (variant.price ?? p.price) && <del>{money(variant.old || p.old)}</del>}
+                                                <button
+                                                  type="button"
+                                                  className="inline-color-price-button"
+                                                  onClick={() => {
+                                                    setInlineColorPriceId(colorKey);
+                                                    setInlineColorPriceValue(String(variant.price ?? p.price ?? ""));
+                                                  }}
+                                                  aria-label={`Edit ${vColorName} price`}
+                                                  title={`Edit ${vColorName} price`}
+                                                ><Pencil size={11} /></button>
+                                              </>
+                                            )}
+                                          </div>
+                                          <span className="variant-row-stock">{colorTotalStock}</span>
+                                          <button
+                                            type="button"
+                                            className={`catalog-status-toggle compact ${colorStatus === "Active" ? "is-active" : ""}`}
+                                            onClick={() => saveVariantStatus(p, variant, colorStatus === "Active" ? "Draft" : "Active")}
+                                            aria-label={`${colorStatus === "Active" ? "Deactivate" : "Activate"} ${vColorName}`}
+                                            aria-pressed={colorStatus === "Active"}
+                                            disabled={busy}
+                                          ><span /></button>
                                           <button
                                             type="button"
                                             className="color-btn-quick"
@@ -4812,6 +5311,7 @@ export default function Admin() {
                                                       <td style={{ textAlign: "center" }}>
                                                         <button
                                                           type="button"
+                                                          className={`catalog-status-toggle compact ${v.status === "Active" ? "is-active" : ""}`}
                                                           disabled={busy}
                                                           onClick={() => {
                                                             const nextStatus = v.status === "Active" ? "Draft" : "Active";
@@ -4829,18 +5329,8 @@ export default function Admin() {
                                                               }
                                                             });
                                                           }}
-                                                          style={{
-                                                            border: v.status === "Active" ? "1px solid #bbf7d0" : "1px solid #cbd5e1",
-                                                            background: v.status === "Active" ? "#f0fdf4" : "#f8fafc",
-                                                            color: v.status === "Active" ? "#16a34a" : "#64748b",
-                                                            padding: "2px 8px",
-                                                            borderRadius: 10,
-                                                            fontSize: 10,
-                                                            fontWeight: 700,
-                                                            cursor: "pointer",
-                                                          }}
                                                         >
-                                                          {v.status === "Active" ? "Active" : "Disabled"}
+                                                          <span />
                                                         </button>
                                                       </td>
 
@@ -4878,6 +5368,16 @@ export default function Admin() {
                                     </div>
                                   );
                                 })}
+                                {colorsList.length > 3 && (
+                                  <button
+                                    type="button"
+                                    className="variant-list-toggle"
+                                    onClick={() => setExpandedVariantLists((current) => ({ ...current, [p.id]: !showAllVariants }))}
+                                  >
+                                    {showAllVariants ? "Show Less" : `See ${hiddenVariantCount} More Variants`}
+                                    <ChevronDown size={14} className={showAllVariants ? "rotated" : ""} />
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -4885,7 +5385,7 @@ export default function Admin() {
                       })}
                     </div>
                      <div className="product-list-summary">
-                       Showing {productRows.length} product{productRows.length !== 1 ? "s" : ""}. Draft products are hidden from the storefront.
+                       <AdminPagination {...productPage} />
                      </div>
                      {!productRows.length && (
                        <div className="admin-empty">
@@ -4905,68 +5405,61 @@ export default function Admin() {
                    </div>
                  )}
                 {section === "customers" && (
-                  <div className="admin-card">
-                    <div className="admin-toolbar">
-                      <div className="admin-search">
-                        <Search size={18} />
-                        <input
-                          value={query}
-                          onChange={(e) => setQuery(e.target.value)}
-                          placeholder="Search name, phone or city"
-                          aria-label="Search customers"
-                        />
-                      </div>
-                    </div>
-                    {customers.length ? (
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Customer</TableHead>
-                            <TableHead>Contact</TableHead>
-                            <TableHead>City</TableHead>
-                            <TableHead>Orders</TableHead>
-                            <TableHead>Test order value</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {customers
-                            .filter((c) =>
-                              (c.name + " " + c.phone + " " + c.city)
-                                .toLowerCase()
-                                .includes(query.toLowerCase()),
-                            )
-                            .map((c) => (
-                              <TableRow key={c.phone}>
-                                <TableCell>
-                                  <b>{c.name}</b>
-                                </TableCell>
-                                <TableCell>
-                                  {c.phone}
-                                  <small>
-                                    {c.email || "No email provided"}
-                                  </small>
-                                </TableCell>
-                                <TableCell>{c.city}</TableCell>
-                                <TableCell>{c.count}</TableCell>
-                                <TableCell>{money(c.total)}</TableCell>
-                              </TableRow>
-                            ))}
-                        </TableBody>
-                      </Table>
-                    ) : (
-                      <div className="admin-empty">
-                        <Users />
-                        <h3>Your customer list starts here</h3>
-                        <p>
-                          Customers appear automatically when a test order is
-                          placed.
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  <CustomerIntelligence
+                    orders={orders}
+                    view={customerView}
+                    onViewChange={navigateCustomerView}
+                    onOpenHistory={(phone) => setCustomerHistoryPhone(phone || null)}
+                  />
                 )}
                 {section === "settings" && config && (
                   <>
+                    {settingsSubTab !== "settings_home" && (
+                      <div className="settings-backbar">
+                        <button type="button" className="settings-back-button" onClick={() => navigate("settings", "settings_home")}>
+                          <ArrowLeft size={16} />
+                          <span>Back to Store Settings</span>
+                        </button>
+                      </div>
+                    )}
+                    {settingsSubTab === "settings_home" && (
+                      <div className="settings-dashboard">
+                        <div className="settings-dashboard-heading">
+                          <div>
+                            <span className="admin-overline">STORE CONTROL CENTER</span>
+                            <h1>Store Settings</h1>
+                            <p>Manage your storefront and business preferences</p>
+                          </div>
+                        </div>
+                        <div className="settings-dashboard-groups">
+                          {settingsGroups.map((group) => (
+                            <section className="settings-dashboard-section" key={group.title}>
+                              <h2>{group.title}</h2>
+                              <div className="settings-dashboard-grid">
+                                {group.cards.map((card, index) => {
+                                  const Icon = card.icon;
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="settings-dashboard-card"
+                                      key={`${group.title}-${card.title}-${index}`}
+                                      onClick={() => navigate("settings", card.id)}
+                                    >
+                                      <span className="settings-dashboard-card-icon"><Icon size={17} /></span>
+                                      <span className="settings-dashboard-card-copy">
+                                        <span className="settings-dashboard-card-title">{card.title}</span>
+                                        <span className="settings-dashboard-card-description">{card.description}</span>
+                                      </span>
+                                      <ChevronRight className="settings-dashboard-card-arrow" size={17} />
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </section>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {/* 1. Store Settings Subtab */}
                     {settingsSubTab === "store_settings" && (
                       <form
@@ -5302,6 +5795,18 @@ export default function Admin() {
                     {/* 3. Offers Subtab */}
                     {settingsSubTab === "offers" && (
                       <div className="admin-settings" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                        <div className="offers-metrics-grid">
+                          {[
+                            { label: "Total offers", value: (config.offers || []).length, tone: "purple" },
+                            { label: "Active offers", value: (config.offers || []).filter((offer) => offer.enabled).length, tone: "green" },
+                            { label: "Scheduled offers", value: (config.offers || []).filter((offer) => offer.status === "Scheduled" || Boolean(offer.startAt && Date.parse(offer.startAt) > Date.now())).length, tone: "blue" },
+                          ].map((metric) => (
+                            <div className={`offers-metric-card ${metric.tone}`} key={metric.label}>
+                              <span>{metric.label}</span>
+                              <strong>{metric.value}</strong>
+                            </div>
+                          ))}
+                        </div>
                         {/* Add New Offer Card */}
                         <div className="admin-card">
                           <div className="admin-card-head">
@@ -5927,19 +6432,40 @@ export default function Admin() {
 
                     {/* 6. Theme Setting / Banners Subtab */}
                     {settingsSubTab === "theme_setting" && (
-                      <BannersManager
-                        config={config}
-                        onSave={async (updated) => {
-                          setConfig(updated);
-                          setSettingsSaved(false);
+                      <>
+                        <ThemeEditor
+                          config={config}
+                          onSave={async (updated) => {
+                            setConfig(updated);
+                            setSettingsSaved(false);
+                            const ok = await write({ action: "settings", settings: updated });
+                            if (ok) {
+                              setSettingsSaved(true);
+                              setData({ ...data, settings: updated });
+                            }
+                            return ok;
+                          }}
+                        />
+                        <DealCarousels config={config} products={products} onSave={async (updated) => {
                           const ok = await write({ action: "settings", settings: updated });
-                          if (ok) {
-                            setSettingsSaved(true);
-                            toast.success("Banner carousel & theme settings saved");
-                          }
+                          if (ok) { setConfig(updated); setData({ ...data, settings: updated }); }
                           return ok;
-                        }}
-                      />
+                        }} />
+                        <BannersManager
+                          config={config}
+                          onSave={async (updated) => {
+                            setConfig(updated);
+                            setSettingsSaved(false);
+                            const ok = await write({ action: "settings", settings: updated });
+                            if (ok) {
+                              setSettingsSaved(true);
+                              setData({ ...data, settings: updated });
+                              toast.success("Banner carousel & theme settings saved");
+                            }
+                            return ok;
+                          }}
+                        />
+                      </>
                     )}
 
                     {/* 7. Category Settings Subtab */}
@@ -5966,7 +6492,7 @@ export default function Admin() {
         const hasVariants = groupVariants.length > 1;
         return (
           <Dialog open onOpenChange={(open) => { if (!open && !busy) setPriceEditing(null); }}>
-            <DialogContent className="admin-dialog price-dialog" style={{ maxWidth: 680, maxHeight: "90vh", overflowY: "auto" }}>
+            <DialogContent className="admin-dialog price-dialog" style={{ width: "94vw", maxWidth: priceMode === "bundle" ? 1120 : 680, maxHeight: "90vh", overflowY: "auto" }}>
               <DialogHeader>
                 <DialogTitle>Option / Variant Prices</DialogTitle>
                 <DialogDescription>Set normal price and sale price for each variant option of {priceEditing.name}.</DialogDescription>
@@ -5981,11 +6507,27 @@ export default function Admin() {
                   const offerPrice = offerPriceValue !== "" ? Number(offerPriceValue) : undefined;
                   const offerStart = offerStartValue || undefined;
                   const offerEnd = offerEndValue || undefined;
+                  const bundles = priceMode === "bundle"
+                    ? bundleRows
+                        .map((row) => ({
+                          id: row.id,
+                          quantity: Math.max(1, Number(row.quantity) || 1),
+                          price: Math.max(0, Number(row.totalPrice) || 0),
+                          content: row.promo.trim(),
+                          contentArabic: row.promoArabic.trim(),
+                        }))
+                        .filter((row) => row.price > 0)
+                    : [];
+
+                  if (priceMode === "bundle" && !bundles.length) {
+                    toast.error("Add at least one valid bundle tier before saving.");
+                    return;
+                  }
 
                   // Save parent / base product price
                   let ok = await write({
                     action: "product",
-                    product: { ...priceEditing, price, old, costPrice, offerPrice, offerStart, offerEnd },
+                    product: { ...priceEditing, price, old, costPrice, offerPrice, offerStart, offerEnd, bundles, pricingType: priceMode === "bundle" ? "bundle" : "offer" },
                   });
 
                   // Save variant-wise Normal Price & Sale Price
@@ -6006,13 +6548,14 @@ export default function Admin() {
                     await load();
                     setPriceEditing(null);
                     setVariantPrices({});
+                    setBundleRows([]);
                     toast.success("Option-wise prices updated successfully");
                   }
                 }}
                 style={{ display: "flex", flexDirection: "column", gap: 20 }}
               >
                 {/* Pricing Strategy Mode Selector Radio Buttons */}
-                {hasVariants && (
+                {(
                   <div style={{ background: "#f8fafc", padding: 14, borderRadius: 12, border: "1px solid #e2e8f0", display: "flex", flexDirection: "column", gap: 10 }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: "#1e293b", textTransform: "uppercase", letterSpacing: "0.5px" }}>
                       Select Pricing Strategy Mode
@@ -6029,17 +6572,19 @@ export default function Admin() {
                         />
                         Single / Uniform Price (Same for all colours)
                       </label>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: priceMode === "variant" ? "#2563eb" : "#475569", margin: 0 }}>
-                        <input
-                          type="radio"
-                          name="priceMode"
-                          value="variant"
-                          checked={priceMode === "variant"}
-                          onChange={() => setPriceMode("variant")}
-                          style={{ width: 16, height: 16, accentColor: "#2563eb", cursor: "pointer" }}
-                        />
-                        Option / Colour-Wise Custom Prices
-                      </label>
+                      {hasVariants && (
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: priceMode === "variant" ? "#2563eb" : "#475569", margin: 0 }}>
+                          <input
+                            type="radio"
+                            name="priceMode"
+                            value="variant"
+                            checked={priceMode === "variant"}
+                            onChange={() => setPriceMode("variant")}
+                            style={{ width: 16, height: 16, accentColor: "#2563eb", cursor: "pointer" }}
+                          />
+                          Option / Colour-Wise Custom Prices
+                        </label>
+                      )}
                       <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: priceMode === "offer" ? "#d48806" : "#475569", margin: 0 }}>
                         <input
                           type="radio"
@@ -6050,6 +6595,17 @@ export default function Admin() {
                           style={{ width: 16, height: 16, accentColor: "#d48806", cursor: "pointer" }}
                         />
                         Offer-Wise Prices
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, color: priceMode === "bundle" ? "#6254ff" : "#475569", margin: 0 }}>
+                        <input
+                          type="radio"
+                          name="priceMode"
+                          value="bundle"
+                          checked={priceMode === "bundle"}
+                          onChange={() => setPriceMode("bundle")}
+                          style={{ width: 16, height: 16, accentColor: "#6254ff", cursor: "pointer" }}
+                        />
+                        Bundle Price
                       </label>
                     </div>
                   </div>
@@ -6119,6 +6675,57 @@ export default function Admin() {
                     <span style={{ fontSize: 11, color: "#8c6b00", display: "block", marginTop: 8 }}>
                       Note: Active offer price automatically starts the live countdown timer on product detail page when current time is within start/end window.
                     </span>
+                  </div>
+                )}
+
+                {priceMode === "bundle" && (
+                  <div style={{ background: "#ffffff", padding: 16, borderRadius: 12, border: "1px solid #e2e8f0", boxShadow: "0 2px 8px rgba(32,54,83,.04)" }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 750, color: "#33456a", display: "block" }}>Bundle pricing</span>
+                        <span style={{ fontSize: 11, color: "#71809a" }}>Set a fixed total for each exact quantity. Customers are charged the selected bundle price.</span>
+                      </div>
+                      <span style={{ fontSize: 11, color: "#6254ff", background: "#f0eeff", padding: "5px 8px", borderRadius: 6, fontWeight: 700 }}>Automatic savings</span>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 280px) 1fr", gap: 14, marginBottom: 18 }}>
+                      <label style={{ margin: 0, fontSize: 12, fontWeight: 650, color: "#52627e" }}>
+                        Normal price *
+                        <input type="number" min="0" step="1" required value={originalPriceValue} onChange={(e) => setOriginalPriceValue(e.target.value)} />
+                      </label>
+                      <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: 8, fontSize: 11, color: "#7b879b" }}>
+                        Bundle rows use the normal price to calculate per-piece savings.
+                      </div>
+                    </div>
+
+                    <div className="bundle-pricing-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.45fr 28px", gap: 8, alignItems: "center", marginBottom: 8, color: "#52627e", fontSize: 10.5, fontWeight: 750, textTransform: "uppercase", letterSpacing: ".35px" }}>
+                      <span>Quantity</span><span>Total price</span><span>Per piece</span><span>Promotional text</span><span />
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                      {bundleRows.map((row, index) => {
+                        const quantity = Math.max(1, Number(row.quantity) || 1);
+                        const total = Math.max(0, Number(row.totalPrice) || 0);
+                        const perPiece = quantity ? total / quantity : 0;
+                        const normal = Math.max(0, Number(originalPriceValue) || 0);
+                        const saving = normal > 0 && perPiece < normal ? Math.round((1 - perPiece / normal) * 100) : 0;
+                        return (
+                          <div key={row.id} className="bundle-pricing-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.45fr 28px", gap: 8, alignItems: "center" }}>
+                            <input aria-label={`Bundle quantity ${index + 1}`} type="number" min="1" step="1" value={row.quantity} onChange={(e) => setBundleRows((rows) => rows.map((current) => current.id === row.id ? { ...current, quantity: e.target.value } : current))} />
+                            <input aria-label={`Bundle total price ${index + 1}`} type="number" min="0" step="1" value={row.totalPrice} onChange={(e) => setBundleRows((rows) => rows.map((current) => current.id === row.id ? { ...current, totalPrice: e.target.value } : current))} />
+                            <span style={{ fontSize: 12, color: "#52627e", whiteSpace: "nowrap" }}>{money(perPiece)} {saving > 0 && <b style={{ color: "#16a34a", fontSize: 10 }}>(-{saving}%)</b>}</span>
+                            <input aria-label={`Bundle promotional text ${index + 1}`} placeholder="Promotional text" value={row.promo} onChange={(e) => setBundleRows((rows) => rows.map((current) => current.id === row.id ? { ...current, promo: e.target.value } : current))} />
+                            <button type="button" aria-label={`Remove bundle ${index + 1}`} disabled={bundleRows.length <= 1} onClick={() => setBundleRows((rows) => rows.filter((current) => current.id !== row.id))} style={{ width: 28, height: 28, borderRadius: 7, background: bundleRows.length <= 1 ? "#f8fafc" : "#fff1f2", color: bundleRows.length <= 1 ? "#cbd5e1" : "#ef4444", fontWeight: 800 }}>
+                              ×
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <button type="button" onClick={() => setBundleRows((rows) => [...rows, { id: `bundle-${Date.now()}`, quantity: String((Number(rows[rows.length - 1]?.quantity) || 0) + 1), totalPrice: "", promo: "", promoArabic: "" }])} style={{ marginTop: 12, display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 10px", border: "1px solid #6254ff", borderRadius: 7, color: "#6254ff", fontSize: 11.5, fontWeight: 700, background: "#faf9ff" }}>
+                      <Plus size={13} /> Add bundle
+                    </button>
                   </div>
                 )}
 
@@ -7484,7 +8091,7 @@ export default function Admin() {
       >
         <DialogContent className="admin-dialog" style={{ maxWidth: 560 }}>
           <DialogHeader>
-            <DialogTitle>🚚 Courier & Airway Bill Booking</DialogTitle>
+            <DialogTitle>Courier tracking</DialogTitle>
             <DialogDescription>
               Assign Pakistan courier partner and consignment number for <b>{courierOrder?.id}</b>
             </DialogDescription>
@@ -7527,17 +8134,6 @@ export default function Admin() {
                       onChange={(e) => setTrackingNumber(e.target.value)}
                       placeholder="e.g. TRX-98234123"
                     />
-                    <button
-                      type="button"
-                      className="admin-secondary"
-                      style={{ padding: "0 12px", whiteSpace: "nowrap" }}
-                      onClick={() => {
-                        const prefix = courierName.includes("Trax") ? "TRX" : courierName.includes("TCS") ? "TCS" : courierName.includes("Leopards") ? "LEO" : courierName.includes("PostEx") ? "PEX" : "CN";
-                        setTrackingNumber(`${prefix}-${Math.floor(10000000 + Math.random() * 90000000)}`);
-                      }}
-                    >
-                      Generate #
-                    </button>
                   </div>
                 </label>
               </div>
@@ -8065,7 +8661,7 @@ export default function Admin() {
                     <div />
                   )}
 
-                  {(data?.role === "super_admin" || data?.permissions?.includes("orders.delete") || data?.role === "admin") && (
+                  {(data?.role === "super_admin" || data?.permissions?.includes("orders.delete")) && (
                     <button
                       type="button"
                       style={{
@@ -8881,14 +9477,9 @@ export default function Admin() {
           });
           if (res) {
             await load();
-            setSelectedReturn((curr) => curr && curr.id === returnId ? {
-              ...curr,
-              returnStatus: status,
-              rejectionReason: opts?.rejectionReason || curr.rejectionReason,
-              courier: opts?.courier || curr.courier,
-              trackingNumber: opts?.trackingNumber || curr.trackingNumber,
-            } : curr);
+            setSelectedReturn(res.returnRequest);
           }
+          return !!res;
         }}
         onInspect={async (returnId, inspectionStatus, notes) => {
           const res = await write({
@@ -8899,12 +9490,10 @@ export default function Admin() {
           });
           if (res) {
             await load();
-            setSelectedReturn((curr) => curr && curr.id === returnId ? {
-              ...curr,
-              inspectionStatus,
-              internalNotes: notes ? (curr.internalNotes ? `${curr.internalNotes}\n[Inspection]: ${notes}` : `[Inspection]: ${notes}`) : curr.internalNotes,
-            } : curr);
+            setSelectedReturn(res.returnRequest);
+            toast.success('Inspection saved');
           }
+          return !!res;
         }}
         onRestock={async (returnId, itemIndexes, note, action) => {
           const res = await write({
@@ -8916,11 +9505,9 @@ export default function Admin() {
           });
           if (res) {
             await load();
-            setSelectedReturn((curr) => curr && curr.id === returnId ? {
-              ...curr,
-              inventoryAction: (action === "do_not_restock" ? "Do Not Restock" : "Restocked") as any,
-            } : curr);
+            setSelectedReturn(res.returnRequest);
           }
+          return !!res;
         }}
         onProcessRefund={async (returnId, refundData) => {
           const res = await write({
@@ -8930,19 +9517,9 @@ export default function Admin() {
           });
           if (res) {
             await load();
-            setSelectedReturn((curr) => curr && curr.id === returnId ? {
-              ...curr,
-              refundStatus: "Refunded",
-              approvedRefundAmount: refundData.refundAmount,
-              refundMethod: refundData.refundMethod,
-              refundReference: refundData.refundReference,
-              refundAccountTitle: refundData.refundAccountTitle,
-              refundAccountNumber: refundData.refundAccountNumber,
-              refundBankName: refundData.refundBankName,
-              refundedAt: new Date().toISOString(),
-              refundedBy: data?.name || "CSR Agent",
-            } : curr);
+            setSelectedReturn(res.returnRequest);
           }
+          return !!res;
         }}
         onAddNote={async (returnId, note) => {
           const res = await write({
@@ -8952,11 +9529,10 @@ export default function Admin() {
           });
           if (res) {
             await load();
-            setSelectedReturn((curr) => curr && curr.id === returnId ? {
-              ...curr,
-              internalNotes: curr.internalNotes ? `${curr.internalNotes}\n${note}` : note,
-            } : curr);
+            setSelectedReturn(res.returnRequest);
+            toast.success('Note added');
           }
+          return !!res;
         }}
         onNavigateToOrder={(orderId) => {
           setSelectedReturn(null);
@@ -8991,6 +9567,80 @@ export default function Admin() {
           return false;
         }}
       />
+
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent className="admin-dialog" style={{ maxWidth: 560 }}>
+          <DialogHeader>
+            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Link size={18} /> Import listing from link
+            </DialogTitle>
+            <DialogDescription>
+              Paste a public product page URL. Cartify will read its title, description, image and price into a draft for you to review.
+            </DialogDescription>
+          </DialogHeader>
+          <div style={{ display: "grid", gap: 12, marginTop: 8 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#334155" }}>
+              Product page link
+              <input
+                autoFocus
+                type="url"
+                value={importUrl}
+                onChange={(event) => setImportUrl(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") void importListingFromLink(); }}
+                placeholder="https://example.com/products/item"
+                style={{ width: "100%", marginTop: 7, padding: "11px 12px", border: "1px solid #cbd5e1", borderRadius: 8 }}
+              />
+            </label>
+            <p style={{ margin: 0, color: "#64748b", fontSize: 12 }}>
+              Only public HTTP/HTTPS pages are supported. You can edit every imported field before saving.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
+              <button type="button" className="admin-secondary" onClick={() => setImportDialogOpen(false)} disabled={importBusy}>Cancel</button>
+              <button type="button" className="admin-primary" onClick={() => void importListingFromLink()} disabled={importBusy || !importUrl.trim()}>
+                {importBusy ? "Importing…" : "Import and review"}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={csvDialogOpen} onOpenChange={setCsvDialogOpen}>
+        <DialogContent className="admin-dialog" style={{ maxWidth: 680 }}>
+          <DialogHeader>
+            <DialogTitle style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Upload size={18} /> Import products from CSV
+            </DialogTitle>
+            <DialogDescription>
+              Upload a CSV with one product per row. Imported products are created as drafts so you can review them before publishing.
+            </DialogDescription>
+          </DialogHeader>
+          <div style={{ display: "grid", gap: 14, marginTop: 8 }}>
+            <label className="admin-secondary" style={{ display: "inline-flex", width: "fit-content", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <Upload size={16} /> {csvFileName || "Choose CSV file"}
+              <input type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(event) => void readCsv(event.target.files?.[0])} />
+            </label>
+            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, fontSize: 12, color: "#475569" }}>
+              Required headers: <b>name, category, price</b><br />
+              Optional headers: subcategory, old, sku, description, image, stock, status
+            </div>
+            {csvRows.length > 0 && (
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 8, overflow: "auto", maxHeight: 220 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr><th style={{ textAlign: "left", padding: 9 }}>Product</th><th style={{ textAlign: "left", padding: 9 }}>Category</th><th style={{ textAlign: "left", padding: 9 }}>Price</th><th style={{ textAlign: "left", padding: 9 }}>SKU</th></tr></thead>
+                  <tbody>{csvRows.slice(0, 10).map((row) => <tr key={row.id}><td style={{ padding: 9 }}>{row.name}</td><td style={{ padding: 9 }}>{row.category}</td><td style={{ padding: 9 }}>Rs. {row.price}</td><td style={{ padding: 9 }}>{row.sku || "—"}</td></tr>)}</tbody>
+                </table>
+                {csvRows.length > 10 && <p style={{ margin: 0, padding: 9, color: "#64748b" }}>Showing 10 of {csvRows.length} rows.</p>}
+              </div>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button type="button" className="admin-secondary" onClick={() => setCsvDialogOpen(false)} disabled={importBusy}>Cancel</button>
+              <button type="button" className="admin-primary" onClick={() => void importCsvRows()} disabled={importBusy || !csvRows.length}>
+                {importBusy ? "Importing…" : `Import ${csvRows.length || ""} product${csvRows.length === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Hidden container that becomes visible during window.print() via @media print */}
       {airwayBillOrders && (

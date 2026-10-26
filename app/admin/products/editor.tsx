@@ -1,4 +1,5 @@
 "use client";
+import { adminFetch } from "@/lib/admin-request";
 import { useEffect, useState, useRef, useMemo, type ReactNode } from "react";
 import {
   ArrowLeft,
@@ -55,6 +56,7 @@ import "./editor.css";
 type Props = {
   mode: "create" | "edit";
   initialProductId?: string;
+  initialProduct?: ManagedProduct;
 };
 
 function slugify(text: string) {
@@ -120,8 +122,10 @@ function RichTextButton({
   );
 }
 
-export default function ProductEditor({ mode, initialProductId }: Props) {
-  const [loading, setLoading] = useState(mode === "edit");
+export default function ProductEditor({ mode, initialProductId, initialProduct }: Props) {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -260,7 +264,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
       loadedColors.push(prod.color);
     }
     if ((prod as any).variantOptions && Array.isArray((prod as any).variantOptions)) {
-      const colorOpt = (prod as any).variantOptions.find((o: any) => o.name.toLowerCase() === "color");
+      const colorOpt = (prod as any).variantOptions.find((o: any) => o?.name && o.name.toLowerCase() === "color");
       if (colorOpt && Array.isArray(colorOpt.values)) {
         loadedColors = Array.from(new Set([...loadedColors, ...colorOpt.values]));
       }
@@ -298,7 +302,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
     // Extract Sizes
     let loadedSizes: string[] = [];
     if ((prod as any).variantOptions && Array.isArray((prod as any).variantOptions)) {
-      const sizeOpt = (prod as any).variantOptions.find((o: any) => o.name.toLowerCase() === "size");
+      const sizeOpt = (prod as any).variantOptions.find((o: any) => o?.name && o.name.toLowerCase() === "size");
       if (sizeOpt && Array.isArray(sizeOpt.values)) {
         loadedSizes = sizeOpt.values;
       }
@@ -360,14 +364,39 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
     setIsDirty(false);
   }
 
+  // Ignore browser extension unhandled rejections (e.g. Chrome extension M_ID errors)
+  useEffect(() => {
+    function handleUnhandledRejection(event: PromiseRejectionEvent) {
+      if (
+        event.reason &&
+        (event.reason.stack?.includes("chrome-extension://") ||
+          event.reason.message?.includes("M_ID") ||
+          event.reason.message?.includes("reading 'M_ID'"))
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }
+    window.addEventListener("unhandledrejection", handleUnhandledRejection);
+    return () => window.removeEventListener("unhandledrejection", handleUnhandledRejection);
+  }, []);
+
   // Load Data on Mount
   useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setLoadError('');
     async function loadData() {
       try {
         const [catRes, adminRes] = await Promise.all([
-          fetch("/api/categories"),
-          fetch("/api/admin"),
+          adminFetch("/api/categories", { signal: controller.signal }),
+          adminFetch("/api/admin", { signal: controller.signal }),
         ]);
+        if (controller.signal.aborted) return;
+        if (!catRes.ok || !adminRes.ok) {
+          const data = await (!adminRes.ok ? adminRes : catRes).json() as { error?: string };
+          throw new Error(data.error || 'Unable to load product data.');
+        }
         if (catRes.ok) {
           const catData = (await catRes.json()) as any;
           if (catData.categories) setCategoryTree(catData.categories);
@@ -376,7 +405,11 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
           const adminData = (await adminRes.json()) as any;
           if (adminData.products) setExistingProducts(adminData.products);
 
-          const targetId = initialProductId || new URLSearchParams(location.search).get("id");
+          if (mode === "create" && initialProduct) {
+            populateForm(initialProduct);
+          }
+
+          const targetId = initialProductId || (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("id") : null);
           if (mode === "edit" && targetId) {
             const found: ManagedProduct | undefined = (adminData.products || []).find(
               (p: ManagedProduct) => p.id === targetId
@@ -384,18 +417,19 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
             if (found) {
               populateForm(found);
             } else {
-              toast.error("Product not found");
+              throw new Error('Product not found. Return to the product list and choose an existing product.');
             }
           }
         }
       } catch (e: any) {
-        toast.error(e.message || "Failed to load product data");
+        if (!controller.signal.aborted) setLoadError(e.message || 'Failed to load product data.');
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     loadData();
-  }, [mode, initialProductId]);
+    return () => controller.abort();
+  }, [mode, initialProductId, initialProduct, loadAttempt]);
 
   // Unsaved changes warning
   useEffect(() => {
@@ -445,7 +479,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
   async function uploadDescriptionImage(file: File | undefined) {
     if (!file) return;
     try {
-      const response = await fetch("/api/media", {
+      const response = await adminFetch("/api/media", {
         method: "POST",
         headers: { "Content-Type": file.type },
         body: file,
@@ -767,7 +801,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
       const uploadedUrls: string[] = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const res = await fetch("/api/media", {
+        const res = await adminFetch("/api/media", {
           method: "POST",
           headers: { "Content-Type": file.type },
           body: file,
@@ -895,7 +929,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
   // Bulk Quick Actions
   function handleApplyStockToAll() {
     const num = Number(quickBulkStock);
-    if (!quickBulkStock.trim() || isNaN(num) || num < 0) {
+    if (!quickBulkStock.trim() || !Number.isSafeInteger(num) || num < 0) {
       toast.error("Please enter a valid stock quantity.");
       return;
     }
@@ -908,6 +942,18 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
     );
     setIsDirty(true);
     toast.success(`Set stock to ${num} for ${targetIds.size} variant(s)`);
+  }
+
+  function applyQuantityToEveryVariant() {
+    const quantity = Number(quickBulkStock);
+    if (!quickBulkStock.trim() || !Number.isSafeInteger(quantity) || quantity < 0) {
+      toast.error("Enter a whole quantity of 0 or more.");
+      return;
+    }
+    if (!variants.length) return;
+    setVariants(current => current.map(variant => ({ ...variant, stock: quantity })));
+    setIsDirty(true);
+    toast.success(`Quantity set to ${quantity} for each of ${variants.length} variants.`);
   }
 
   function handleBulkSetPrice() {
@@ -931,8 +977,8 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
 
   function handleBulkSetStock() {
     const val = Number(bulkStockInput);
-    if (!Number.isFinite(val) || val < 0) {
-      toast.error("Please enter a valid stock quantity.");
+    if (!Number.isSafeInteger(val) || val < 0) {
+      toast.error("Please enter a whole stock quantity of 0 or more.");
       return;
     }
     const targetIds =
@@ -1017,6 +1063,9 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
     }
 
     if (!hasVariants) {
+      if (!stock.trim() || !Number.isSafeInteger(Number(stock)) || Number(stock) < 0) {
+        newErrors.stock = "Enter a whole product quantity of 0 or more.";
+      }
       if (!price || Number(price) <= 0) {
         newErrors.price = "Enter a valid regular price greater than 0.";
       }
@@ -1029,10 +1078,16 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
       }
       const duplicateSkus = new Set<string>();
       const seenSkus = new Set<string>();
+      const productSku = sku.trim().toLowerCase();
+      if (productSku) seenSkus.add(productSku);
       for (const v of variants) {
-        if (v.sku) {
-          if (seenSkus.has(v.sku)) duplicateSkus.add(v.sku);
-          seenSkus.add(v.sku);
+        if (!Number.isSafeInteger(Number(v.stock)) || Number(v.stock) < 0) {
+          newErrors.stock = `Enter a whole quantity of 0 or more for ${v.title || v.sku || "each variant"}.`;
+        }
+        const variantSku = v.sku?.trim().toLowerCase();
+        if (variantSku) {
+          if (seenSkus.has(variantSku)) duplicateSkus.add(v.sku!.trim());
+          seenSkus.add(variantSku);
         }
       }
       if (duplicateSkus.size > 0) {
@@ -1050,6 +1105,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
 
   // Save Product Handler
   async function handleSave(targetStatus?: "Active" | "Draft") {
+    if (busy || loading || loadError) return;
     if (!validateForm()) return;
 
     setBusy(true);
@@ -1080,6 +1136,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
 
       const payload: ManagedProduct = {
         id: generatedId,
+        _revision: mode === 'edit' ? existingProducts.find(product => product.id === generatedId)?._revision : undefined,
         name: name.trim(),
         category,
         subcategory: subcategory || "General",
@@ -1134,7 +1191,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
         },
       };
 
-      const response = await fetch("/api/admin", {
+      const response = await adminFetch("/api/admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "product", product: payload }),
@@ -1160,6 +1217,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
     }
   }
 
+  if (loadError) return <div className="admin-error" role="alert"><p>{loadError}</p><button className="admin-secondary" onClick={() => setLoadAttempt(value => value + 1)}>Retry</button><a className="admin-secondary" href="/admin?section=products">Back to products</a></div>;
   if (loading) {
     return (
       <div
@@ -1350,7 +1408,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
                 </div>
               </div>
 
-              <div className="editor-grid-2">
+              {mode === "edit" && <div className="editor-grid-2">
                 <div className="editor-field">
                   <label>Brand</label>
                   <input
@@ -1375,7 +1433,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
                     }}
                   />
                 </div>
-              </div>
+              </div>}
             </div>
           </section>
 
@@ -1506,6 +1564,32 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
             </div>
           </section>
 
+          <section className="editor-card" aria-labelledby="product-quantity-heading">
+            <div className="editor-card-header">
+              <div><h2 id="product-quantity-heading">Product Quantity &amp; Inventory</h2><small>Set the number of units available to sell.</small></div>
+              <span className={`stock-badge-pill ${stockBadgeStatus.class}`}>{stockBadgeStatus.label}</span>
+            </div>
+            <div className="editor-card-body">
+              <div className="editor-grid-2">
+                <div className="editor-field">
+                  <label htmlFor="product-stock-quantity">{hasVariants ? "Total quantity (all variants)" : "Product quantity"}</label>
+                  <input id="product-stock-quantity" type="number" min="0" step="1" inputMode="numeric" value={hasVariants ? computedTotalStock : stock} readOnly={hasVariants} aria-invalid={Boolean(errors.stock)} aria-describedby="product-stock-help" onChange={event => { setStock(event.target.value); setIsDirty(true); }} />
+                  <small id="product-stock-help">{hasVariants ? "Calculated automatically from your color and size quantities." : "Enter the available stock. Set 0 when the product is out of stock."}</small>
+                  {errors.stock && <span role="alert" style={{ color: "#dc2626", fontSize: 12 }}>{errors.stock}</span>}
+                </div>
+                <div className="editor-field">
+                  <label htmlFor="product-low-stock-threshold">Low stock alert threshold</label>
+                  <input id="product-low-stock-threshold" type="number" min="1" step="1" value={lowStockAlert} onChange={event => { setLowStockAlert(event.target.value); setIsDirty(true); }} />
+                </div>
+              </div>
+              {hasVariants && <div className="editor-variant-quantity">
+                <div className="editor-field"><label htmlFor="all-variant-quantity">Quantity per variant</label><input id="all-variant-quantity" type="number" min="0" step="1" inputMode="numeric" placeholder="e.g. 10" value={quickBulkStock} onChange={event => setQuickBulkStock(event.target.value)} /></div>
+                <button type="button" className="editor-btn-secondary" disabled={!variants.length || !quickBulkStock.trim()} onClick={applyQuantityToEveryVariant}>Apply to all {variants.length} variants</button>
+                <small>{variants.length ? "Sets this quantity for every color/size combination. You can adjust individual quantities in Generated Combinations below." : "Select your colors and sizes below first, then enter a quantity for each variant."}</small>
+              </div>}
+            </div>
+          </section>
+
           {/* 3. Product Structure & Options Card */}
           <section className="editor-card">
             <div className="editor-card-header">
@@ -1618,42 +1702,6 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
                     </div>
                   </div>
 
-                  <div className="editor-grid-2">
-                    <div className="editor-field">
-                      <label>
-                        <span>Stock Quantity</span>
-                        <span className={`stock-badge-pill ${stockBadgeStatus.class}`}>
-                          {stockBadgeStatus.label}
-                        </span>
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        placeholder="0"
-                        value={stock}
-                        onChange={(e) => {
-                          setStock(e.target.value);
-                          setIsDirty(true);
-                        }}
-                      />
-                    </div>
-
-                    <div className="editor-field">
-                      <label>Low Stock Alert Threshold</label>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        placeholder="5"
-                        value={lowStockAlert}
-                        onChange={(e) => {
-                          setLowStockAlert(e.target.value);
-                          setIsDirty(true);
-                        }}
-                      />
-                    </div>
-                  </div>
                 </div>
               ) : (
                 /* Variant Attribute Selectors */
@@ -2532,137 +2580,116 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
                       </div>
                     )}
 
-                    {/* Variants Matrix Table */}
-                    <div className="variants-table-wrap">
-                      <table className="variants-table">
-                        <thead>
-                          <tr>
-                            <th style={{ width: 34 }}>
+                    {/* Variants Matrix */}
+                    <div className="variants-matrix-wrap">
+                      <div
+                        className="variants-matrix-grid"
+                        style={{ gridTemplateColumns: `160px repeat(${filteredVariants.length}, minmax(150px, 1fr))` }}
+                      >
+                        <div className="variants-matrix-side">
+                          <div className="variants-matrix-brand">Variant Stock</div>
+                          <div className="variants-matrix-base-sku">{sku || "Product SKU"}</div>
+                          <button
+                            type="button"
+                            className="variants-matrix-image"
+                            onClick={() => setIsImageManagerOpen(true)}
+                            title="Manage product images"
+                          >
+                            <img
+                              src={
+                                productPreviewObject.image
+                                  ? productPreviewObject.image.startsWith("/") || productPreviewObject.image.startsWith("http")
+                                    ? productPreviewObject.image
+                                    : `/images/${productPreviewObject.image}.jpg`
+                                  : "/placeholder.svg"
+                              }
+                              alt={name || "Product"}
+                            />
+                          </button>
+                          <div className="variants-matrix-cost">Cost Price: {money(Number(costPrice || 0))}</div>
+                        </div>
+
+                        {filteredVariants.map((v) => {
+                          const isSelected = selectedVariantIds.has(v.id);
+                          const eff = getVariantEffectiveImage(productPreviewObject, v, v.color);
+                          const imgUrl = eff.url
+                            ? eff.url.startsWith("/") || eff.url.startsWith("http")
+                              ? eff.url
+                              : `/images/${eff.url}.jpg`
+                            : "";
+                          return (
+                            <div key={`${v.id}-head`} className={`variant-matrix-head ${isSelected ? "selected" : ""}`}>
                               <input
                                 type="checkbox"
-                                checked={
-                                  selectedVariantIds.size === filteredVariants.length &&
-                                  filteredVariants.length > 0
-                                }
-                                onChange={(e) => handleSelectAllFilteredVariants(e.target.checked)}
+                                checked={isSelected}
+                                onChange={() => handleToggleVariantSelect(v.id)}
+                                aria-label={`Select ${v.title || v.sku || "variant"}`}
                               />
-                            </th>
-                            <th style={{ width: 60 }}>Image</th>
-                            <th>Variant</th>
-                            <th>SKU</th>
-                            <th>Price (Rs.)</th>
-                            <th>Stock</th>
-                            <th>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredVariants.map((v) => {
-                            const isSelected = selectedVariantIds.has(v.id);
-                            const eff = getVariantEffectiveImage(
-                              productPreviewObject,
-                              v,
-                              v.color
-                            );
-                            const imgUrl = eff.url
-                              ? eff.url.startsWith("/") || eff.url.startsWith("http")
-                                ? eff.url
-                                : `/images/${eff.url}.jpg`
-                              : "";
-
-                            return (
-                              <tr
-                                key={v.id}
-                                style={{ background: isSelected ? "#f0f7ff" : undefined }}
+                              <button
+                                type="button"
+                                className="variant-matrix-thumb"
+                                onClick={() => setOverrideModalVariant(v)}
+                                title="Click to customize image for this variant"
                               >
-                                <td>
-                                  <input
-                                    type="checkbox"
-                                    checked={isSelected}
-                                    onChange={() => handleToggleVariantSelect(v.id)}
-                                  />
-                                </td>
-                                <td>
-                                  <div className="variant-img-cell">
-                                    <button
-                                      type="button"
-                                      className="variant-thumbnail-btn"
-                                      onClick={() => setOverrideModalVariant(v)}
-                                      title="Click to customize image for this variant"
-                                    >
-                                      {imgUrl ? (
-                                        <img src={imgUrl} alt={v.title || "Variant"} />
-                                      ) : (
-                                        <ImagePlus size={14} style={{ color: "#94a3b8" }} />
-                                      )}
-                                    </button>
-                                    <span className={`var-badge ${eff.source}`}>
-                                      {eff.source === "override"
-                                        ? "Custom"
-                                        : eff.source === "color"
-                                        ? "Color"
-                                        : "Main"}
-                                    </span>
-                                  </div>
-                                </td>
-                                <td>
-                                  <b style={{ fontSize: 12.5, color: "#0f172a" }}>
-                                    {v.title || `${v.color || ""} / ${v.size || ""}`}
-                                  </b>
-                                </td>
-                                <td>
-                                  <input
-                                    type="text"
-                                    className="variant-input-cell"
-                                    value={v.sku || ""}
-                                    placeholder="SKU"
-                                    onChange={(e) => handleUpdateVariant(v.id, "sku", e.target.value)}
-                                    style={{ width: 140 }}
-                                  />
-                                </td>
-                                <td>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    className="variant-input-cell"
-                                    value={v.price ?? ""}
-                                    placeholder="Rs."
-                                    onChange={(e) =>
-                                      handleUpdateVariant(v.id, "price", Number(e.target.value))
-                                    }
-                                    style={{ width: 90 }}
-                                  />
-                                </td>
-                                <td>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    className="variant-input-cell"
-                                    value={v.stock ?? 0}
-                                    placeholder="0"
-                                    onChange={(e) =>
-                                      handleUpdateVariant(v.id, "stock", Number(e.target.value))
-                                    }
-                                    style={{ width: 75 }}
-                                  />
-                                </td>
-                                <td>
-                                  <select
-                                    className="variant-input-cell"
-                                    value={v.status || "Active"}
-                                    onChange={(e) =>
-                                      handleUpdateVariant(v.id, "status", e.target.value as any)
-                                    }
-                                    style={{ width: 95 }}
-                                  >
-                                    <option value="Active">Active</option>
-                                    <option value="Draft">Draft</option>
-                                  </select>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                                {imgUrl ? <img src={imgUrl} alt={v.title || "Variant"} /> : <ImagePlus size={16} />}
+                              </button>
+                              <input
+                                type="text"
+                                className="variant-matrix-sku"
+                                value={v.sku || ""}
+                                placeholder="SKU"
+                                onChange={(e) => handleUpdateVariant(v.id, "sku", e.target.value)}
+                              />
+                              <span>{v.color || v.size || "Variant"}</span>
+                            </div>
+                          );
+                        })}
+
+                        <div className="variant-matrix-row-label">Quantity</div>
+                        {filteredVariants.map((v) => (
+                          <div key={`${v.id}-stock`} className="variant-matrix-cell">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              aria-label={`Quantity for ${v.title || v.sku || v.id}`}
+                              className="variant-matrix-stock"
+                              value={v.stock ?? 0}
+                              onChange={(e) => handleUpdateVariant(v.id, "stock", Number(e.target.value))}
+                            />
+                          </div>
+                        ))}
+
+                        <div className="variant-matrix-row-label">Action</div>
+                        {filteredVariants.map((v) => (
+                          <div key={`${v.id}-status`} className="variant-matrix-cell">
+                            <select
+                              className="variant-matrix-select"
+                              value={v.status || "Active"}
+                              onChange={(e) => handleUpdateVariant(v.id, "status", e.target.value as any)}
+                            >
+                              <option value="Active">Enable</option>
+                              <option value="Draft">Disable</option>
+                            </select>
+                          </div>
+                        ))}
+
+                        <div className="variant-matrix-row-label">Price</div>
+                        {filteredVariants.map((v) => (
+                          <div key={`${v.id}-price`} className="variant-matrix-cell">
+                            <div className="variant-matrix-price-card">
+                              {Number(oldPrice) > Number(price) && <span>{money(Number(oldPrice))}</span>}
+                              <input
+                                type="number"
+                                min="0"
+                                value={v.price ?? ""}
+                                placeholder="Price"
+                                onChange={(e) => handleUpdateVariant(v.id, "price", Number(e.target.value))}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -3391,7 +3418,7 @@ export default function ProductEditor({ mode, initialProductId }: Props) {
                     const f = e.target.files?.[0];
                     if (!f) return;
                     try {
-                      const res = await fetch("/api/media", {
+                      const res = await adminFetch("/api/media", {
                         method: "POST",
                         headers: { "Content-Type": f.type },
                         body: f,

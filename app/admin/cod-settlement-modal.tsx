@@ -1536,7 +1536,7 @@ function RecordSingleSettlementModal({
             borderRadius: 8,
             padding: "10px 14px",
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
             gap: 8,
             fontSize: 12,
           }}
@@ -1579,7 +1579,7 @@ function RecordSingleSettlementModal({
         </div>
 
         <form onSubmit={handleSubmit} style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
             <div>
               <label style={{ fontSize: 11.5, fontWeight: 700, color: "#334155" }}>
                 Amount Received (PKR) <span style={{ color: "#dc2626" }}>*</span>
@@ -1626,7 +1626,7 @@ function RecordSingleSettlementModal({
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
             <div>
               <label style={{ fontSize: 11.5, fontWeight: 700, color: "#334155" }}>
                 Courier <span style={{ color: "#dc2626" }}>*</span>
@@ -1924,7 +1924,7 @@ function BulkCourierRemittanceModal({
 
         <form onSubmit={handleSubmit} style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
           {/* Top Form Fields */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", gap: 10 }}>
             <div>
               <label style={{ fontSize: 11, fontWeight: 700, color: "#334155" }}>
                 Courier <span style={{ color: "#dc2626" }}>*</span>
@@ -2029,7 +2029,7 @@ function BulkCourierRemittanceModal({
               borderRadius: 8,
               padding: "10px 14px",
               display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))",
               gap: 10,
               boxSizing: "border-box",
             }}
@@ -2406,7 +2406,7 @@ function SettlementHistoryModal({
             borderRadius: 8,
             padding: "10px 14px",
             display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
+            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
             gap: 8,
             textAlign: "center",
             boxSizing: "border-box",

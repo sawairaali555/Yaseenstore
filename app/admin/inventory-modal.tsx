@@ -4,6 +4,8 @@ import { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Search,
@@ -19,6 +21,7 @@ import {
 } from "lucide-react";
 import type { ManagedProduct } from "@/lib/store-data";
 import type { ProductVariant } from "@/app/catalog";
+import { toast } from 'sonner';
 
 interface Props {
   open: boolean;
@@ -325,11 +328,12 @@ export default function InventoryModal({
       colorGalleries: localColorGalleries,
     };
 
-    const res = await onSave(updatedProduct);
-    setBusy(false);
-    if (res !== false) {
-      onOpenChange(false);
-    }
+    try {
+      const res = await onSave(updatedProduct);
+      if (res !== false) onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to save inventory.');
+    } finally { setBusy(false); }
   };
 
   const activeColorGroup = colorGroups.find(
@@ -337,8 +341,8 @@ export default function InventoryModal({
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+    <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
+      <DialogContent className="admin-dialog"
         style={{
           maxWidth: 1100,
           width: "95vw",
@@ -352,6 +356,8 @@ export default function InventoryModal({
           background: "#fff",
         }}
       >
+        <DialogTitle className="sr-only">Variant and inventory management</DialogTitle>
+        <DialogDescription className="sr-only">{product?.name || 'Product inventory'}</DialogDescription>
         {/* Workspace Top Header Bar */}
         <div
           style={{

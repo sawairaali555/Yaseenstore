@@ -55,7 +55,7 @@ type Props = {
   setSize: (s: string) => void;
   saved: boolean;
   favorite: () => void;
-  add: () => void;
+  add: (quantity?: number, bundleId?: string, color?: string, variantId?: string) => void;
   buy: () => void;
 };
 const detectClientSource = () => {
@@ -107,15 +107,37 @@ const addWorkingDays = (date: Date, days: number) => {
 const formatDeliveryDate = (date: Date) =>
   date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 const renderRichDescription = (value = "") => {
-  const withoutScripts = value
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, "")
-    .replace(/\son\w+=["'][^"']*["']/gi, "");
-
-  return withoutScripts.replace(
-    /\s(href|src)=["'](?!https?:\/\/|\/api\/media\/|\/images\/|data:image\/)[^"']*["']/gi,
-    ""
-  );
+  const allowedTags = new Set(["P", "BR", "H2", "H3", "H4", "UL", "OL", "LI", "STRONG", "B", "EM", "I", "U", "DEL", "S", "BLOCKQUOTE", "PRE", "CODE", "A", "IMG"]);
+  const allowedAttrs = new Set(["A:href", "A:target", "IMG:src", "IMG:alt"]);
+  if (typeof DOMParser === "undefined") {
+    return value
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<\/?(?:script|style|iframe|object|embed|form|meta|link)[^>]*>/gi, "")
+      .replace(/<[^>]*>/g, (tag) => tag.replace(/\s+[^\s=>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g, ""));
+  }
+  const doc = new DOMParser().parseFromString(`<div>${value}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return "";
+  root.querySelectorAll("*").forEach((node) => {
+    if (!allowedTags.has(node.tagName)) {
+      node.replaceWith(...Array.from(node.childNodes));
+      return;
+    }
+    Array.from(node.attributes).forEach((attribute) => {
+      const key = `${node.tagName}:${attribute.name.toLowerCase()}`;
+      if (attribute.name.toLowerCase().startsWith("on") || !allowedAttrs.has(key)) node.removeAttribute(attribute.name);
+    });
+    if (node.tagName === "A") {
+      const href = node.getAttribute("href") || "";
+      if (!/^(https?:\/\/|\/)/i.test(href) || /^\s*javascript:/i.test(href)) node.removeAttribute("href");
+      if (node.getAttribute("target") === "_blank") node.setAttribute("rel", "noopener noreferrer");
+    }
+    if (node.tagName === "IMG") {
+      const src = node.getAttribute("src") || "";
+      if (!/^(https?:\/\/|\/api\/media\/|\/images\/)/i.test(src)) node.removeAttribute("src");
+    }
+  });
+  return root.innerHTML;
 };
 export default function ProductDetail({
   product: p,
@@ -142,15 +164,40 @@ export default function ProductDetail({
   const [orderSucceeded, setOrderSucceeded] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
   const [now, setNow] = useState(() => new Date());
-  const images = Array.from(new Set([p.image, ...(p.images || [])].filter(Boolean)));
+  const configuredColorOptions = Array.from(new Set([
+    ...(p.variantOptions?.find(option => option.name.toLowerCase() === "color")?.values || []),
+    ...Object.keys(p.colorGalleries || {}),
+    ...(p.variants || []).map(variant => variant.color || ""),
+  ].filter(Boolean)));
+  const colorOptions = configuredColorOptions.filter(color =>
+    getSizesForColor(p, color, false).some(size =>
+      p.allowBackorders || getVariantAvailableStock(p, null, size, color) > 0
+    )
+  );
+  const [selectedColor, setSelectedColor] = useState(
+    colorOptions.find(color => color.toLowerCase() === (p.color || "").toLowerCase()) || colorOptions[0] || ""
+  );
+  const selectedGallery = Object.entries(p.colorGalleries || {}).find(([color]) => color.toLowerCase() === selectedColor.toLowerCase())?.[1];
+  const selectedVariantImages = (p.variants || [])
+    .filter(variant => (variant.color || "").toLowerCase() === selectedColor.toLowerCase())
+    .flatMap(variant => [variant.image, ...(variant.images || [])]);
+  const colorImages = [selectedGallery?.mainImage, ...(selectedGallery?.images || []), ...selectedVariantImages].filter((value): value is string => Boolean(value));
+  const images = Array.from(new Set(colorImages.length ? colorImages : [p.image, ...(p.images || [])].filter(Boolean)));
   const [selectedImage, setSelectedImage] = useState(0);
-  const imageValue = images[selectedImage] || p.image;
+  const imageValue = images[selectedImage] || images[0] || p.image;
   const image = productImage(imageValue);
+  const isBundlePricing = p.pricingType === "bundle" && Boolean(p.bundles?.length);
+  const bundleSelection = p.bundles?.[selectedBundle];
   const offer = activeOffer(p, now);
   const selectedVariant = p.variants?.find(variant => (variant.size || 'Standard') === size &&
-    (!p.color || (variant.color || '').toLowerCase() === p.color.toLowerCase()));
-  const displayPrice = selectedVariant?.price && selectedVariant.price > 0 ? selectedVariant.price : effectivePrice(p, now);
-  const cost = displayPrice * qty;
+    (!selectedColor || (variant.color || '').toLowerCase() === selectedColor.toLowerCase()));
+  const displayPrice = isBundlePricing
+    ? (bundleSelection?.price || effectivePrice(p, now))
+    : (selectedVariant?.price && selectedVariant.price > 0 ? selectedVariant.price : effectivePrice(p, now));
+  const cost = isBundlePricing ? displayPrice : displayPrice * qty;
+  const purchaseQty = isBundlePricing ? (bundleSelection?.quantity || 1) : qty;
+  const comparePrice = (p.old > p.price ? p.old : p.price) * (isBundlePricing ? purchaseQty : 1);
+  const priceSaving = Math.max(0, comparePrice - displayPrice);
   const countdown = countdownParts(offer?.end || null);
   const reviews = p.reviews?.length ? p.reviews : sampleReviews;
   const reviewCount = reviews.length;
@@ -176,25 +223,45 @@ export default function ProductDetail({
     trustGuarantee: p.deal?.trustGuarantee || "Order guarantee",
     chips: p.deal?.chips?.length ? p.deal.chips : ["Free returns", "Delay credit", "Return if item damaged", "15-day refund support"],
   };
-  const allSizeOptions = getSizesForColor(p, p.color, true);
+  const allSizeOptions = getSizesForColor(p, selectedColor, true);
   const sizeStock = p.sizeStock;
   const hasSizeStock = !!sizeStock && Object.keys(sizeStock).length > 0;
   const configuredSizes = hasSizeStock ? allSizeOptions.filter(s => Object.prototype.hasOwnProperty.call(sizeStock, s)) : allSizeOptions;
-  const sizeOptions = configuredSizes.length > 0 ? configuredSizes : allSizeOptions;
+  const sizeOptions = configuredSizes.filter(s =>
+    p.allowBackorders || getVariantAvailableStock(p, null, s, selectedColor) > 0
+  );
   const hasSizeOptions = sizeOptions.length > 1 || (sizeOptions.length === 1 && sizeOptions[0] !== "Standard");
   const richDescription = renderRichDescription(p.description || "");
 
-  const stockForSize = (selected: string) => p.allowBackorders ? 50 : getVariantAvailableStock(p, null, selected, p.color);
+  const stockForSize = (selected: string) => p.allowBackorders ? 50 : getVariantAvailableStock(p, null, selected, selectedColor);
   const inStock = isProductPurchasable(p);
-  const selectedInStock = getSizeAvailabilityDetails(p, hasSizeOptions ? size : 'Standard', p.color).isPurchasable;
+  const selectedInStock = getSizeAvailabilityDetails(p, hasSizeOptions ? size : 'Standard', selectedColor).isPurchasable;
   const availableForSelected = stockForSize(hasSizeOptions ? size : "Standard");
   const quantityLimit = Math.max(0, Math.min(10, availableForSelected));
 
   useEffect(() => {
-    const inStockSizes = sizeOptions.filter(s => stockForSize(s) > 0);
-    if (!inStockSizes.includes(size)) {
-      setSize(inStockSizes[0] || sizeOptions[0] || "Standard");
-    }
+    const nextQty = Math.min(Math.max(qty, 1), Math.max(1, quantityLimit));
+    if (nextQty !== qty) setQty(nextQty);
+  }, [selectedColor, size, quantityLimit, qty, setQty]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedVariant = p.variants?.find(variant => variant.id === params.get("variantId"));
+    const requestedColor = requestedVariant?.color || params.get("color") || p.color || colorOptions[0] || "";
+    const matchingColor = colorOptions.find(color => color.toLowerCase() === requestedColor.toLowerCase());
+    const defaultColor = colorOptions.find(color => color.toLowerCase() === (p.color || "").toLowerCase()) || colorOptions[0] || "";
+    const nextColor = matchingColor || defaultColor;
+    const availableSizes = getSizesForColor(p, nextColor, true);
+    const requestedSize = requestedVariant?.size || params.get("size") || "";
+    const requestedSizeIsAvailable = availableSizes.includes(requestedSize) &&
+      (p.allowBackorders || getVariantAvailableStock(p, null, requestedSize, nextColor) > 0);
+    const nextSize = requestedSizeIsAvailable
+      ? requestedSize
+      : availableSizes.find(option => p.allowBackorders || getVariantAvailableStock(p, null, option, nextColor) > 0) ||
+        availableSizes[0] || "Standard";
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Restore the selected variant from the product URL.
+    setSelectedColor(nextColor);
+    setSelectedImage(0);
+    setSize(nextSize);
     setQty(1);
   }, [p.id]);
 
@@ -208,10 +275,10 @@ export default function ProductDetail({
   const colourVariants = products
     .filter((product) => (product.listingGroup || product.id) === variantGroup)
     .filter((product) => product.id !== variantGroup)
-    .filter((product) => product.status === "Active" && (Object.values(product.sizeStock || {}).some(v => Number(v) > 0) || Number(product.stock || 0) > 0))
+    .filter((product) => isProductPurchasable(product))
     .filter((product, index, list) => list.findIndex((item) => item.id === product.id) === index);
   const childColourVariants = colourVariants;
-  const hasColourVariants = childColourVariants.length > 0;
+  const hasColourVariants = colorOptions.length > 1 || childColourVariants.length > 0;
   return (
     <>
       <div className="breadcrumb">
@@ -269,10 +336,10 @@ export default function ProductDetail({
           <h1>{p.name}</h1>
           <div className="pdp-pricing" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
             <strong style={{ fontSize: 28, fontWeight: 700, color: "#1e293b" }}>{money(displayPrice)}</strong>
-            {p.old > displayPrice && <del style={{ fontSize: 16, color: "#94a3b8" }}>{money(p.old)}</del>}
-            {(p.old > displayPrice || offer) && (
+            {priceSaving > 0 && <del style={{ fontSize: 16, color: "#94a3b8" }}>{money(comparePrice)}</del>}
+            {(priceSaving > 0 || (!isBundlePricing && offer)) && (
               <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 13, fontWeight: 600, padding: "3px 9px", borderRadius: 4 }}>
-                You save {money(offer ? offer.saving : p.old - displayPrice)}
+                You save {money(!isBundlePricing && offer ? offer.saving : priceSaving)}
               </span>
             )}
             <button className="pdp-review-summary" type="button" onClick={() => { setActiveTab("reviews"); document.getElementById("product-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }); }} aria-label={`View ${reviewCount} product reviews`} style={{ marginLeft: "auto", margin: 0, padding: 0 }}>
@@ -281,18 +348,43 @@ export default function ProductDetail({
             </button>
           </div>
           <section className="pdp-deal-box" aria-label="Product offer">
-            <div className="pdp-deal-strip" style={{ background: "#ff0000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 4, overflow: "hidden", height: 38 }}>
+            {!isBundlePricing && <div className="pdp-deal-strip" style={{ background: "#ff0000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 4, overflow: "hidden", height: 38 }}>
               <strong style={{ background: "#facc15", color: "#b91c1c", fontStyle: "italic", fontSize: 13, fontWeight: 900, padding: "0 12px", height: "100%", display: "flex", alignItems: "center" }}>LIGHTNING DEAL</strong>
-              <span style={{ fontSize: 13, fontWeight: 700, paddingRight: 16 }}><Check size={15} /> Free shipping over PKR 150</span>
-            </div>
+              <span style={{ fontSize: 13, fontWeight: 700, paddingRight: 16 }}><Check size={15} /> Free shipping over PKR 3,000</span>
+            </div>}
 
-            {hasColourVariants && (
+            {!isBundlePricing && hasColourVariants && (
               <div style={{ marginTop: 18 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#334155", marginBottom: 8 }}>
-                  Color: <strong>{p.color || "Black"}</strong>
+                  Color: <strong>{selectedColor || "Standard"}</strong>
                 </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  {childColourVariants.map((variant) => {
+                  {colorOptions.length > 1 ? colorOptions.map((color) => {
+                    const gallery = Object.entries(p.colorGalleries || {}).find(([name]) => name.toLowerCase() === color.toLowerCase())?.[1];
+                    const variantImage = p.variants?.find(variant => (variant.color || "").toLowerCase() === color.toLowerCase() && (variant.image || variant.images?.length));
+                    const src = productImage(gallery?.mainImage || gallery?.images?.[0] || variantImage?.image || variantImage?.images?.[0] || p.image);
+                    const selected = color.toLowerCase() === selectedColor.toLowerCase();
+                    return (
+                      <button
+                        type="button"
+                        key={color}
+                        aria-label={`Select ${color} colour`}
+                        aria-pressed={selected}
+                        onClick={() => {
+                          setSelectedColor(color);
+                          setSelectedImage(0);
+                          const nextSizes = getSizesForColor(p, color, true);
+                          const available = nextSizes.find(option => p.allowBackorders || getVariantAvailableStock(p, null, option, color) > 0);
+                          setSize(available || nextSizes[0] || "Standard");
+                          setQty(1);
+                        }}
+                        style={{ border: selected ? "2px solid #000000" : "1px solid #e2e8f0", borderRadius: 6, padding: 3, width: 62, textAlign: "center", background: "#f8fafc" }}
+                      >
+                        <img src={src} alt="" style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 4 }} />
+                        <span style={{ display: "block", fontSize: 11, fontWeight: selected ? 700 : 400, color: "#334155", marginTop: 2 }}>{color}</span>
+                      </button>
+                    );
+                  }) : childColourVariants.map((variant) => {
                     const value = variant.image;
                     const src = productImage(value);
                     const selected = variant.id === p.id;
@@ -311,7 +403,7 @@ export default function ProductDetail({
               </div>
             )}
 
-            {hasSizeOptions && (
+            {!isBundlePricing && hasSizeOptions && (
               <div style={{ marginTop: 16 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#334155", marginBottom: 8 }}>
                   Size: <strong>{size}</strong>
@@ -331,28 +423,75 @@ export default function ProductDetail({
               </div>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 22 }}>
-              <button
+            {!isBundlePricing && <div className="pdp-quantity-control" aria-label="Choose quantity">
+              <span>Quantity</span>
+              <button type="button" disabled={qty <= 1} aria-label="Decrease quantity" onClick={() => setQty(Math.max(1, qty - 1))}>
+                <Minus size={16} />
+              </button>
+              <strong aria-live="polite">{qty}</strong>
+              <button type="button" disabled={qty >= quantityLimit} aria-label="Increase quantity" onClick={() => setQty(Math.min(quantityLimit, qty + 1))}>
+                <Plus size={16} />
+              </button>
+              <small>{quantityLimit > 0 ? `${quantityLimit} available` : "Out of stock"}</small>
+            </div>}
+
+            {isBundlePricing && (
+              <div className="pdp-bundles">
+                <div className="pdp-bundles-heading"><span>BUNDLE &amp; SAVE</span></div>
+                <div className="pdp-bundle-options">
+                  {p.bundles?.map((bundle, index) => {
+                    const regular = (p.old > p.price ? p.old : p.price) * bundle.quantity;
+                    const hasDiscount = regular > bundle.price;
+                    return (
+                      <button
+                        type="button"
+                        className={`pdp-bundle-option${selectedBundle === index ? " selected" : ""}`}
+                        key={bundle.id}
+                        onClick={() => setSelectedBundle(index)}
+                        aria-pressed={selectedBundle === index}
+                      >
+                        {index === 1 && p.bundles.length > 1 && <span className="pdp-bundle-popular">Most Popular</span>}
+                        <span className="pdp-bundle-radio" aria-hidden="true" />
+                        <span className="pdp-bundle-copy">
+                          <strong>{bundle.content?.trim() || `Buy ${bundle.quantity}`}</strong>
+                          <small>{bundle.price >= config.freeThreshold ? "Free Shipping · " : ""}Pack of {bundle.quantity}</small>
+                        </span>
+                        <span className="pdp-bundle-prices">
+                          <strong>{money(bundle.price)}</strong>
+                          {hasDiscount && <del>{money(regular)}</del>}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: isBundlePricing ? "1fr" : "1fr 1fr", gap: 14, marginTop: 14 }}>
+              {!isBundlePricing && <button
                 type="button"
                 style={{ width: "100%", height: 48, background: "#ff5000", color: "#ffffff", borderRadius: 24, fontSize: 15, fontWeight: 700, border: 0, cursor: "pointer", boxShadow: "0 4px 12px rgba(255,80,0,.25)" }}
                 disabled={!inStock || !selectedInStock}
-                onClick={add}
+                onClick={() => {
+                  const bundle = p.bundles?.[selectedBundle];
+                  add(bundle?.quantity || qty, bundle?.id, selectedColor, selectedVariant?.id);
+                }}
               >
                 Add to cart
-              </button>
+              </button>}
               <button
                 type="button"
-                className="pdp-buy-pulse"
-                style={{ width: "100%", height: 48, background: "#ff5000", color: "#ffffff", borderRadius: 24, fontSize: 15, fontWeight: 700, border: 0, cursor: "pointer" }}
-                disabled={!inStock || !selectedInStock}
+                className={`pdp-buy-pulse${isBundlePricing ? " pdp-buy-bundle" : ""}`}
+                style={{ width: "100%", height: 48, background: isBundlePricing ? "#080808" : "#ff5000", color: "#ffffff", borderRadius: isBundlePricing ? 8 : 24, fontSize: 15, fontWeight: 700, border: 0, cursor: "pointer" }}
+                disabled={!inStock || (!isBundlePricing && !selectedInStock)}
                 onClick={() => setCheckoutOpen(true)}
               >
-                Buy It Now
+                {isBundlePricing ? "Buy with Cash on Delivery" : "Buy It Now"}
               </button>
             </div>
 
             <div className="pdp-deal-trust" style={{ marginTop: 20 }}>
-              <p style={{ color: "#166534", fontSize: 13 }}><Truck size={17} /> <b>Free shipping over PKR 150 orders</b> <ChevronRight size={14} /></p>
+              <p style={{ color: "#166534", fontSize: 13 }}><Truck size={17} /> <b>Free shipping on orders over PKR 3,000</b> <ChevronRight size={14} /></p>
               <p style={{ color: "#1e293b", fontSize: 13 }}><ShieldCheck size={17} /> <b>Safe payments · Secure privacy</b> <ChevronRight size={14} /></p>
               <p style={{ color: "#1e293b", fontSize: 13 }}><RotateCcw size={17} /> <b>Order Guarantee</b> <ChevronRight size={14} /></p>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
@@ -377,89 +516,6 @@ export default function ProductDetail({
           )}
           {!inStock && <p className="pdp-order-message" role="status">Out of stock. This product is currently disabled from ordering.</p>}
 
-          {!!p.bundles?.length && <div className="pdp-bundles"><b>Choose your offer</b><div>{p.bundles.map((bundle, index) => { const regular = p.price * bundle.quantity; const saving = regular > bundle.price ? Math.round((1 - bundle.price / regular) * 100) : 0; return <button type="button" className={selectedBundle === index ? "selected" : ""} key={bundle.id} onClick={() => setSelectedBundle(index)}><span><strong>Buy {index + 1} - Save {saving}%</strong> <small>(Pack of {bundle.quantity})</small><em>+ Free Shipping</em></span><span><strong>{money(bundle.price)}</strong><del>{money(regular)}</del></span>{bundle.content && <i>{bundle.content}</i>}{bundle.contentArabic && <i dir="rtl">{bundle.contentArabic}</i>}</button>; })}</div></div>}
-          {hasSizeOptions ? null : (
-            <>
-              <form className="pdp-order-form" onSubmit={async (event) => { event.preventDefault(); if (orderBusy || orderSucceeded) return; const formElement = event.currentTarget; if (!inStock || !selectedInStock) { setOrderMessage("This colour or variant is out of stock."); return; } setOrderBusy(true); setOrderMessage(""); const form = new FormData(formElement); try { const bundle = p.bundles?.[selectedBundle]; const orderQty = Math.min(bundle?.quantity || qty, stockForSize("Standard")); const response = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: form.get("name"), phone: form.get("phone"), city: form.get("city"), address: form.get("address"), source: detectClientSource(), items: [{ id: p.id, qty: orderQty, size: "Standard", color: p.color }] }) }); const data: any = await response.json(); if (!response.ok) throw Error(data.error || "Unable to place order."); setOrderMessage(`Order placed successfully! (${p.color ? `Color: ${p.color}, ` : ''}Qty: ${orderQty}). Ref: ${data.id}`); setOrderSucceeded(true); saveShoppingData("cartify-last-order", data); formElement.reset(); } catch (error) { setOrderMessage(error instanceof Error ? error.message : "Unable to place order."); } finally { setOrderBusy(false); } }}>
-                <header>
-                  <h2>2. Quick Order & Delivery Detail</h2>
-                  <p>Fill out the form below to order with your selected options!</p>
-                </header>
-                <div className="pdp-order-fields">
-                  <label>Full name<input name="name" required placeholder="Full name" disabled={!inStock || !selectedInStock} /></label>
-                  <label>Phone number<input name="phone" required type="tel" pattern="(03[0-9]{9}|\+923[0-9]{9})" placeholder="03XXXXXXXXX" disabled={!inStock || !selectedInStock} /></label>
-                  <label>Province / state<input name="state" required placeholder="Province or state" disabled={!inStock || !selectedInStock} /></label>
-                  <label>City<input name="city" required placeholder="City" disabled={!inStock || !selectedInStock} /></label>
-                  <label className="wide">Complete address<textarea name="address" required minLength={8} placeholder="House number, street, area" disabled={!inStock || !selectedInStock} /></label>
-                </div>
-                <fieldset disabled={!inStock || !selectedInStock}>
-                  <legend>Payment methods</legend>
-                  <label className="cod-highlight">
-                    <input type="radio" defaultChecked name="payment" />
-                    <span><b>Cash on Delivery</b><small>Available across Pakistan</small></span>
-                  </label>
-                </fieldset>
-                {orderMessage && <p className="pdp-order-message" role="status">{orderMessage}</p>}
-                <button className={orderBusy ? "pdp-place-order is-loading" : orderSucceeded ? "pdp-place-order is-success" : "pdp-place-order"} disabled={!inStock || !selectedInStock || orderBusy || orderSucceeded}>
-                  {!inStock || !selectedInStock ? "Out of stock" : orderBusy ? <><span className="pdp-order-spinner" /> Placing order…</> : orderSucceeded ? "Order placed" : `Confirm & Place Order (${qty} item${qty > 1 ? 's' : ''})`}
-                </button>
-              </form>
-              <div className="pdp-options" style={{ display: "flex", flexDirection: "column", gap: 14, background: "#f8fafc", padding: 16, borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                <h3 style={{ fontSize: 14, fontWeight: 600, color: "#1e293b", margin: 0 }}>1. Choose Options</h3>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-end" }}>
-                  {p.color && (
-                    <div style={{ flex: "1 1 150px", display: "flex", flexDirection: "column", gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 500, color: "#56667e" }}>Colour Confirmation</span>
-                      <div style={{ padding: "9px 12px", border: "1px solid #cbd5e1", borderRadius: 6, background: "#ffffff", fontSize: 13, fontWeight: 600, color: "#0f172a", display: "flex", alignItems: "center", gap: 6 }}>
-                        <Check size={14} style={{ color: "#166534" }} /> {p.color}
-                      </div>
-                    </div>
-                  )}
-                  <label style={{ flex: "1 1 150px", margin: 0 }}>
-                    <span style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <b>Quantity Confirmation</b>
-                      <span style={{ fontSize: 11, color: "#166534", fontWeight: 600 }}>✓ Qty: {qty}</span>
-                    </span>
-                    <div className="quantity">
-                      <button
-                        type="button"
-                        disabled={qty <= 1}
-                        aria-label="Decrease quantity"
-                        onClick={() => { setQty(qty - 1); setOrderMessage(""); }}
-                      >
-                        <Minus size={16} />
-                      </button>
-                      <span aria-live="polite">{qty}</span>
-                      <button
-                        type="button"
-                        disabled={qty >= quantityLimit}
-                        aria-label="Increase quantity"
-                        onClick={() => { setQty(qty + 1); setOrderMessage(""); }}
-                      >
-                        <Plus size={16} />
-                      </button>
-                    </div>
-                  </label>
-                  <button
-                    type="button"
-                    className={"pdp-save " + (saved ? "is-saved" : "")}
-                    onClick={favorite}
-                    aria-pressed={saved}
-                    style={{ height: 42 }}
-                  >
-                    <Heart size={19} fill={saved ? "currentColor" : "none"} />
-                    {saved ? "Saved" : "Save item"}
-                  </button>
-                </div>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: "#475569", background: "#ffffff", padding: "8px 12px", borderRadius: 6, border: "1px dashed #cbd5e1", marginTop: 4 }}>
-                  <span><b>Confirmed Selection:</b></span>
-                  {p.color && <span>Colour: <strong>{p.color}</strong></span>}
-                  <span>Quantity: <strong>{qty}</strong></span>
-                  <span>Total Price: <strong style={{ color: "#203664" }}>{money(displayPrice * qty)}</strong></span>
-                </div>
-              </div>
-            </>
-          )}
           {/* Delivery details are shown in the checkout form. */}{false && <div className="pdp-delivery">
             <Truck size={23} />
             <div>
@@ -614,7 +670,7 @@ export default function ProductDetail({
           <div className="checkout-modal-header">
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "#0f172a" }}>Cash on Delivery ( {qty} item{qty > 1 ? "s" : ""} )</h2>
+                <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "#0f172a" }}>Cash on Delivery ( {purchaseQty} item{purchaseQty > 1 ? "s" : ""} )</h2>
                 <span style={{ fontSize: 11, background: "#15803d", color: "#ffffff", padding: "2px 8px", borderRadius: 12, fontWeight: 700 }}>
                   🇵🇰 Pakistan
                 </span>
@@ -635,8 +691,9 @@ export default function ProductDetail({
               }
               const form = new FormData(event.currentTarget);
               const phoneRaw = String(form.get("phone") || "");
-              const phone = cleanPakistanPhone(phoneRaw);
-              if (!isValidPakistanPhone(phone)) {
+              const localPhone = phoneRaw.replace(/\D/g, "");
+              const phone = cleanPakistanPhone(localPhone);
+              if (!/^03\d{9}$/.test(localPhone) || !isValidPakistanPhone(phone)) {
                 setOrderMessage("Please enter a valid Pakistani mobile number (e.g. 0300 1234567).");
                 return;
               }
@@ -667,7 +724,7 @@ export default function ProductDetail({
                     landmark,
                     paymentMethod,
                     source: detectClientSource(),
-                    items: [{ id: p.id, qty: orderQty, size: size || "Standard", color: p.color, variantId: selectedVariant?.id }],
+                    items: [{ id: p.id, qty: orderQty, size: size || "Standard", color: selectedColor, variantId: selectedVariant?.id, bundleId: bundle?.id }],
                   }),
                 });
                 const data: any = await response.json();
@@ -685,13 +742,13 @@ export default function ProductDetail({
             <div className="checkout-modal-product">
               <div style={{ position: "relative" }}>
                 <img src={image} alt={p.name} />
-                <span style={{ position: "absolute", top: -6, left: -6, background: "#1e293b", color: "#ffffff", fontSize: 11, fontWeight: 700, width: 20, height: 20, borderRadius: "50%", display: "grid", placeItems: "center" }}>{qty}</span>
+                <span style={{ position: "absolute", top: -6, left: -6, background: "#1e293b", color: "#ffffff", fontSize: 11, fontWeight: 700, width: 20, height: 20, borderRadius: "50%", display: "grid", placeItems: "center" }}>{purchaseQty}</span>
               </div>
               <div style={{ fontSize: 12, color: "#334155" }}>
                 <b style={{ display: "block", fontSize: 13, color: "#0f172a" }}>{p.name}</b>
                 {hasSizeOptions && <div>Size: <strong>{size}</strong></div>}
-                {p.color && <div>Color: <strong>{p.color}</strong></div>}
-                <div style={{ color: "#ff5000", fontWeight: 700, marginTop: 2 }}>{money(displayPrice)} each</div>
+                {selectedColor && <div>Color: <strong>{selectedColor}</strong></div>}
+                <div style={{ color: "#ff5000", fontWeight: 700, marginTop: 2 }}>{money(displayPrice)} {isBundlePricing ? "bundle total" : "each"}</div>
               </div>
             </div>
 
@@ -720,10 +777,19 @@ export default function ProductDetail({
               </label>
               <label>
                 Mobile Number / موبائل نمبر *
-                <div style={{ display: "flex", gap: 6 }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 10px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: 8, fontSize: 13, fontWeight: 700, color: "#1e293b" }}>🇵🇰 +92</span>
-                  <input name="phone" required type="tel" pattern="(03[0-9]{9}|[+]923[0-9]{9}|3[0-9]{9})" placeholder="0300 1234567" style={{ flex: 1 }} />
-                </div>
+                <input
+                  name="phone"
+                  required
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={11}
+                  pattern="03[0-9]{9}"
+                  title="Enter an 11-digit Pakistani mobile number starting with 03"
+                  placeholder="0300 1234567"
+                  onChange={(event) => {
+                    event.currentTarget.value = event.currentTarget.value.replace(/\D/g, "").slice(0, 11);
+                  }}
+                />
               </label>
               <label>
                 Province / صوبہ *
@@ -819,16 +885,18 @@ export default function ProductDetail({
             <button
               type="submit"
               disabled={orderBusy}
-              style={{ width: "100%", height: 50, background: "linear-gradient(135deg, #ff5000 0%, #e04400 100%)", color: "#ffffff", borderRadius: 25, fontSize: 16, fontWeight: 800, border: 0, cursor: "pointer", marginBottom: 10, boxShadow: "0 6px 16px rgba(255,80,0,.3)" }}
+              className="checkout-complete-order"
+              style={{ width: "100%", height: 50, background: "linear-gradient(135deg, #ff5000 0%, #e04400 100%)", color: "#ffffff", borderRadius: 25, fontSize: 16, fontWeight: 800, border: 0, cursor: "pointer", marginBottom: 14, boxShadow: "0 6px 16px rgba(255,80,0,.3)" }}
             >
               {orderBusy ? "Placing Order…" : `Complete Order (Cash on Delivery) · ${money(cost + delivery)}`}
             </button>
 
             {config.whatsapp && (
               <a
-                href={"https://wa.me/" + config.whatsapp.replace(/[^\d]/g, "") + "?text=" + encodeURIComponent(`Assalam o Alaikum! I want to order from Zeliy Pakistan:\n*Product:* ${p.name}\n*Quantity:* ${qty}${hasSizeOptions ? `\n*Size:* ${size}` : ""}\n*Total:* ${money(cost + delivery)}\n*Payment:* Cash on Delivery`)}
+                href={"https://wa.me/" + config.whatsapp.replace(/[^\d]/g, "") + "?text=" + encodeURIComponent(`Assalam o Alaikum! I want to order from Zeliy Pakistan:\n*Product:* ${p.name}\n*Quantity:* ${purchaseQty}${hasSizeOptions ? `\n*Size:* ${size}` : ""}\n*Total:* ${money(cost + delivery)}\n*Payment:* Cash on Delivery`)}
                 target="_blank"
                 rel="noopener noreferrer"
+                className="checkout-whatsapp-order"
                 style={{ width: "100%", height: 48, background: "#25d366", color: "#ffffff", borderRadius: 24, fontSize: 15, fontWeight: 700, border: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, textDecoration: "none" }}
               >
                 <MessageCircle size={19} /> Order via WhatsApp / واٹس ایپ پر آرڈر کریں

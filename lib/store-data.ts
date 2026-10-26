@@ -1,67 +1,12 @@
 import { env } from 'cloudflare:workers';
-import { products as seed, Product, ProductVariant } from '@/app/catalog';
+import { products as seed, adminDemoProducts, Product, ProductVariant } from '@/app/catalog';
 export type { ProductVariant };
-
-export type CategoryNode = {
-  id: string;
-  parentId: string | null;
-  name: string;
-  slug: string;
-  image: string;
-  enabled: boolean;
-  displayOrder: number;
-  description: string;
-  metaTitle?: string;
-  metaKeywords?: string;
-  metaDescription?: string;
-  depth: number;
-  children: CategoryNode[];
-};
-
-export const defaultCategories = ['Fashion', 'Beauty & Care', 'Home & Kitchen', 'Electronics', 'Accessories'] as const;
-export const categorySeed: Record<string, string[]> = {
-  Fashion: ['Shoes', 'Clothing', 'Traditional wear'],
-  'Beauty & Care': ['Skincare', 'Haircare', 'Beauty tools'],
-  'Home & Kitchen': ['Cookware', 'Storage', 'Home essentials'],
-  Electronics: ['Audio', 'Wearables', 'Mobile accessories'],
-  Accessories: ['Bags', 'Watches', 'Everyday accessories'],
-};
+import { buildDefaultCategoryTree, type CategoryNode } from '@/lib/categories';
+import { categoryAvailability, visibleCategoryTree } from '@/lib/category-availability';
+export { buildDefaultCategoryTree, categorySeed, defaultCategories, topLevelCategoryNames, type CategoryNode } from '@/lib/categories';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'category';
-}
-
-export function buildDefaultCategoryTree(): CategoryNode[] {
-  return defaultCategories.map((name, index) => {
-    const parentId = slugify(name);
-    return {
-      id: parentId,
-      parentId: null,
-      name,
-      slug: parentId,
-      image: '',
-      enabled: true,
-      displayOrder: index,
-      description: '',
-      depth: 0,
-      children: (categorySeed[name] || []).map((child, childIndex) => ({
-        id: `${parentId}-${slugify(child)}`,
-        parentId,
-        name: child,
-        slug: slugify(child),
-        image: '',
-        enabled: true,
-        displayOrder: childIndex,
-        description: '',
-        depth: 1,
-        children: [],
-      })),
-    };
-  });
-}
-
-export function topLevelCategoryNames(tree: CategoryNode[] = []): string[] {
-  return tree.filter((node) => node.enabled).map((node) => node.name);
 }
 
 export function flattenCategoryNames(tree: CategoryNode[] = []): string[] {
@@ -87,6 +32,7 @@ export async function ensureCategoryTables() {
       slug TEXT NOT NULL,
       image TEXT DEFAULT '',
       enabled INTEGER NOT NULL DEFAULT 1,
+      auto_disabled INTEGER NOT NULL DEFAULT 0,
       display_order INTEGER NOT NULL DEFAULT 0,
       description TEXT NOT NULL DEFAULT '',
       meta_title TEXT NOT NULL DEFAULT '',
@@ -97,6 +43,8 @@ export async function ensureCategoryTables() {
     await db.prepare(`ALTER TABLE category_nodes ADD COLUMN meta_title TEXT NOT NULL DEFAULT ''`).run().catch(() => {});
     await db.prepare(`ALTER TABLE category_nodes ADD COLUMN meta_keywords TEXT NOT NULL DEFAULT ''`).run().catch(() => {});
     await db.prepare(`ALTER TABLE category_nodes ADD COLUMN meta_description TEXT NOT NULL DEFAULT ''`).run().catch(() => {});
+    await db.prepare(`ALTER TABLE category_nodes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`).run().catch(() => {});
+    await db.prepare(`ALTER TABLE category_nodes ADD COLUMN auto_disabled INTEGER NOT NULL DEFAULT 0`).run().catch(() => {});
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_category_nodes_parent ON category_nodes(parent_id, display_order, name)`).run();
     return db;
   } catch {
@@ -104,13 +52,14 @@ export async function ensureCategoryTables() {
   }
 }
 
-export async function categoryTree(): Promise<CategoryNode[]> {
+async function readCategoryTree(): Promise<CategoryNode[]> {
   const fallback = buildDefaultCategoryTree();
   const db = await ensureCategoryTables();
   if (!db) return fallback;
 
   try {
-    const rows = await db.prepare('SELECT id, parent_id, name, slug, image, enabled, display_order, description, meta_title, meta_keywords, meta_description, depth FROM category_nodes ORDER BY depth ASC, display_order ASC, name ASC').all<{ id: string; parent_id: string | null; name: string; slug: string; image: string; enabled: number; display_order: number; description: string; meta_title: string; meta_keywords: string; meta_description: string; depth: number }>();
+    const rows = await db.prepare('SELECT id, parent_id, name, slug, image, enabled, auto_disabled, display_order, description, meta_title, meta_keywords, meta_description, depth, deleted FROM category_nodes ORDER BY depth ASC, display_order ASC, name ASC').all<{ id: string; parent_id: string | null; name: string; slug: string; image: string; enabled: number; auto_disabled: number; display_order: number; description: string; meta_title: string; meta_keywords: string; meta_description: string; depth: number; deleted: number }>();
+    const deletedIds = new Set(rows.results.filter(row => row.deleted).map(row => row.id));
     const custom = (rows.results || []).map((row) => ({
       id: row.id,
       parentId: row.parent_id,
@@ -118,6 +67,7 @@ export async function categoryTree(): Promise<CategoryNode[]> {
       slug: row.slug,
       image: row.image,
       enabled: Boolean(row.enabled),
+      autoDisabled: Boolean(row.auto_disabled),
       displayOrder: row.display_order,
       description: row.description,
       metaTitle: row.meta_title,
@@ -138,7 +88,7 @@ export async function categoryTree(): Promise<CategoryNode[]> {
     };
     seed(fallback);
     for (const node of custom) byId.set(node.id, { ...node, children: [] });
-    const mapped = Array.from(byId.values());
+    const mapped = Array.from(byId.values()).filter(node => !deletedIds.has(node.id));
     const map = new Map<string, CategoryNode>();
     for (const node of mapped) map.set(node.id, node);
     const roots: CategoryNode[] = [];
@@ -155,13 +105,25 @@ export async function categoryTree(): Promise<CategoryNode[]> {
   }
 }
 
-export async function categoryTreeForAdmins(): Promise<CategoryNode[]> {
-  return categoryTree();
+export async function categoryTree(catalogProducts?: Promise<ManagedProduct[]>): Promise<CategoryNode[]> {
+  const [tree, products] = await Promise.all([readCategoryTree(), catalogProducts ?? catalog(true)]);
+  return visibleCategoryTree(tree, categoryAvailability(tree, products));
 }
 
-export async function updateCategoryTree(item: Partial<CategoryNode> & { id: string; name: string; slug?: string; parentId?: string | null; enabled?: boolean; description?: string; displayOrder?: number; depth?: number; image?: string; metaTitle?: string; metaKeywords?: string; metaDescription?: string }) {
+export async function categoryTreeForAdmins(): Promise<CategoryNode[]> {
+  return readCategoryTree();
+}
+
+export async function syncCategoryAvailability(): Promise<CategoryNode[]> {
   const db = await ensureCategoryTables();
-  if (!db) return buildDefaultCategoryTree();
+  if (!db) throw new Error('Category database is unavailable.');
+  await db.prepare('UPDATE category_nodes SET enabled=1,auto_disabled=0 WHERE auto_disabled=1').run();
+  return readCategoryTree();
+}
+
+export async function updateCategoryTree(item: Partial<CategoryNode> & { id: string; name: string; slug?: string; parentId?: string | null; enabled?: boolean; description?: string; displayOrder?: number; depth?: number; image?: string; metaTitle?: string; metaKeywords?: string; metaDescription?: string }, guards: D1PreparedStatement[] = []) {
+  const db = await ensureCategoryTables();
+  if (!db) throw new Error('Category database is unavailable.');
 
   const payload = {
     id: item.id,
@@ -178,8 +140,9 @@ export async function updateCategoryTree(item: Partial<CategoryNode> & { id: str
     depth: item.depth ?? (item.parentId ? 1 : 0),
   };
 
-  await db.prepare('INSERT INTO category_nodes (id, parent_id, name, slug, image, enabled, display_order, description, meta_title, meta_keywords, meta_description, depth) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name, slug = excluded.slug, image = excluded.image, enabled = excluded.enabled, display_order = excluded.display_order, description = excluded.description, meta_title = excluded.meta_title, meta_keywords = excluded.meta_keywords, meta_description = excluded.meta_description, depth = excluded.depth').bind(payload.id, payload.parentId, payload.name, payload.slug, payload.image, payload.enabled ? 1 : 0, payload.displayOrder, payload.description, payload.metaTitle, payload.metaKeywords, payload.metaDescription, payload.depth).run();
-  return categoryTree();
+  const statement = db.prepare('INSERT INTO category_nodes (id, parent_id, name, slug, image, enabled, auto_disabled, display_order, description, meta_title, meta_keywords, meta_description, depth) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name, slug = excluded.slug, image = excluded.image, enabled = excluded.enabled, auto_disabled=0, display_order = excluded.display_order, description = excluded.description, meta_title = excluded.meta_title, meta_keywords = excluded.meta_keywords, meta_description = excluded.meta_description, depth = excluded.depth').bind(payload.id, payload.parentId, payload.name, payload.slug, payload.image, payload.enabled ? 1 : 0, payload.displayOrder, payload.description, payload.metaTitle, payload.metaKeywords, payload.metaDescription, payload.depth);
+  await db.batch([...guards, statement]);
+  return syncCategoryAvailability();
 }
 
 export async function ensureInventoryTables() {
@@ -208,30 +171,25 @@ export async function ensureInventoryTables() {
   }
 }
 
-export async function getInventoryLogs(productId?: string, limit = 100) {
+export type InventoryLog = {
+  id: string; product_id: string; variant_id: string | null; sku: string | null;
+  previous_stock: number; change: number; new_stock: number; reason: string;
+  order_id: string | null; actor_id: string | null; actor_name: string | null; created_at: string;
+};
+
+export async function getInventoryLogs(productId?: string, limit = 100, variantId?: string) {
   const db = await ensureInventoryTables();
-  if (!db) return [];
+  if (!db) throw new Error('Inventory database is unavailable.');
   try {
-    let stmt = productId
+    const stmt = productId && variantId
+      ? db.prepare('SELECT * FROM inventory_logs WHERE product_id=? AND variant_id=? ORDER BY created_at DESC LIMIT ?').bind(productId, variantId, limit)
+      : productId
       ? db.prepare('SELECT id, product_id, variant_id, sku, previous_stock, change, new_stock, reason, order_id, actor_id, actor_name, created_at FROM inventory_logs WHERE product_id = ? ORDER BY created_at DESC LIMIT ?').bind(productId, limit)
       : db.prepare('SELECT id, product_id, variant_id, sku, previous_stock, change, new_stock, reason, order_id, actor_id, actor_name, created_at FROM inventory_logs ORDER BY created_at DESC LIMIT ?').bind(limit);
-    const rows = await stmt.all<{
-      id: string;
-      product_id: string;
-      variant_id: string | null;
-      sku: string | null;
-      previous_stock: number;
-      change: number;
-      new_stock: number;
-      reason: string;
-      order_id: string | null;
-      actor_id: string | null;
-      actor_name: string | null;
-      created_at: string;
-    }>();
+    const rows = await stmt.all<InventoryLog>();
     return rows.results || [];
-  } catch {
-    return [];
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -499,6 +457,17 @@ export async function ensureReturnTables() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`).run();
+    const returnRequestColumns = [
+      ['customer_alt_phone', 'TEXT'],
+      ['customer_address', 'TEXT'],
+      ['customer_city', 'TEXT'],
+      ['order_date', 'TEXT'],
+      ['delivery_date', 'TEXT'],
+      ['requested_date', 'TEXT'],
+    ] as const;
+    for (const [column, type] of returnRequestColumns) {
+      await db.prepare(`ALTER TABLE return_requests ADD COLUMN ${column} ${type}`).run().catch(() => {});
+    }
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_return_requests_order ON return_requests(order_id)`).run().catch(() => {});
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_return_requests_status ON return_requests(return_status, created_at)`).run().catch(() => {});
     return db;
@@ -509,19 +478,11 @@ export async function ensureReturnTables() {
 
 export async function getReturnRequests(limit = 1000): Promise<ReturnRequest[]> {
   const db = await ensureReturnTables();
-  if (!db) return defaultSeedReturns;
+  if (!db) throw new Error('Return database is unavailable.');
   try {
     const rows = await db.prepare(
       'SELECT id, order_id, customer_name, customer_phone, customer_alt_phone, customer_address, customer_city, order_date, delivery_date, requested_date, return_status, refund_status, inspection_status, inventory_action, items, total_refundable_amount, approved_refund_amount, return_reason, customer_comments, evidence_images, rejection_reason, internal_notes, refund_method, refund_account_title, refund_account_number, refund_bank_name, refund_reference, refunded_at, refunded_by, courier, tracking_number, timeline, created_at, updated_at FROM return_requests ORDER BY created_at DESC LIMIT ?'
     ).bind(limit).all<any>();
-
-    if (!rows.results || rows.results.length === 0) {
-      // Seed default returns if table is empty
-      for (const ret of defaultSeedReturns) {
-        await saveReturnRequest(ret);
-      }
-      return defaultSeedReturns;
-    }
 
     return (rows.results || []).map((row: any) => ({
       id: row.id,
@@ -559,16 +520,20 @@ export async function getReturnRequests(limit = 1000): Promise<ReturnRequest[]> 
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
-  } catch {
-    return defaultSeedReturns;
+  } catch (error) {
+    throw error;
   }
 }
 
 export async function saveReturnRequest(ret: ReturnRequest) {
   const db = await ensureReturnTables();
-  if (!db) return false;
-  try {
-    await db.prepare(`
+  if (!db) throw new Error('Return database is unavailable.');
+  await returnRequestStatement(ret).run();
+  return true;
+}
+
+export function returnRequestStatement(ret: ReturnRequest) {
+  return database().prepare(`
       INSERT INTO return_requests (
         id, order_id, customer_name, customer_phone, customer_alt_phone, customer_address, customer_city,
         order_date, delivery_date, requested_date, return_status, refund_status,
@@ -646,12 +611,7 @@ export async function saveReturnRequest(ret: ReturnRequest) {
       JSON.stringify(ret.timeline || []),
       ret.createdAt,
       ret.updatedAt || new Date().toISOString()
-    ).run();
-    return true;
-  } catch (err) {
-    console.error("Error saving return request:", err);
-    return false;
-  }
+    );
 }
 
 export type ManagedProduct = Product & {
@@ -696,6 +656,16 @@ export type StoreOffer = {
   minQuantity?: number;
   badgeText?: string;
   enabled: boolean;
+  status?: "Draft" | "Scheduled" | "Active" | "Paused" | "Expired";
+  startAt?: string;
+  endAt?: string;
+  maxDiscount?: number;
+  priority?: number;
+  stackable?: boolean;
+  eligibleProductIds?: string[];
+  eligibleCategories?: string[];
+  usageLimit?: number;
+  perCustomerLimit?: number;
 };
 
 export type InformationPage = {
@@ -714,6 +684,8 @@ export type Settings = {
   whatsapp: string;
   logo?: string;
   logoText?: string;
+  lightningDealProductIds?: string[];
+  clearanceDealProductIds?: string[];
   // Banner & Carousel fields
   banners?: BannerSlide[];
   bannerAutoplay?: boolean;
@@ -751,6 +723,13 @@ export type Settings = {
   promoBanner2ButtonLink?: string;
   promoBanner2Image?: string;
   promoBanner2Enabled?: boolean;
+  themePrimaryColor?: string;
+  themeAccentColor?: string;
+  themeBackgroundColor?: string;
+  themeTextColor?: string;
+  themeFontFamily?: string;
+  themeButtonRadius?: string;
+  themeCardRadius?: string;
 };
 
 export const defaults: Settings = {
@@ -805,10 +784,18 @@ export const defaults: Settings = {
   promoBanner2Link: '/products?category=Accessories',
   promoBanner2Image: '/images/bag.jpg',
   promoBanner2Enabled: true,
+  themePrimaryColor: '#203664',
+  themeAccentColor: '#ff5000',
+  themeBackgroundColor: '#ffffff',
+  themeTextColor: '#1e293b',
+  themeFontFamily: 'Inter, Arial, sans-serif',
+  themeButtonRadius: '12px',
+  themeCardRadius: '16px',
 };
 export function database(){return env.DB ?? null;}
 export async function catalog(all=false):Promise<ManagedProduct[]>{
-  const merged=new Map<string,ManagedProduct>(seed.map(p=>[p.id,{...p,status:'Active'}]));
+  const baseSeed = all ? [...seed, ...adminDemoProducts] : seed;
+  const merged=new Map<string,ManagedProduct>(baseSeed.map(p=>[p.id,{...p,status:p.status || 'Active'}]));
   const db=database();
   if(!db){return [...merged.values()].filter(p=>all||p.status==='Active');}
   try{

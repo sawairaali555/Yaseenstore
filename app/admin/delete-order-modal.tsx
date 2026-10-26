@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { money } from "@/app/catalog";
 import { LifecycleOrder } from "@/lib/order-lifecycle";
+import { toast } from 'sonner';
 
 export type DeletionReason =
   | "Test Order"
@@ -156,16 +157,17 @@ export default function DeleteOrderModal({
   const handleDelete = async () => {
     if (!canDelete || !reason) return;
     setBusy(true);
-    const success = await onDelete(order, reason as DeletionReason, note.trim());
-    setBusy(false);
-    if (success) {
-      onOpenChange(false);
-    }
+    try {
+      const success = await onDelete(order, reason as DeletionReason, note.trim());
+      if (success) onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to delete order.');
+    } finally { setBusy(false); }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+    <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
+      <DialogContent className="admin-dialog"
         style={{
           maxWidth: 540,
           padding: 0,
@@ -491,4 +493,3 @@ export default function DeleteOrderModal({
     </Dialog>
   );
 }
-

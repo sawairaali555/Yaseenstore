@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
   ShoppingBag,
@@ -25,11 +25,11 @@ import {
   Phone,
   User,
   Clock,
+  MessageCircle,
 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Toaster, toast } from 'sonner';
 import ProductDetail from "./product-detail";
-import ProductCarousel from "@/components/product-carousel";
 import OrderProgress from '@/components/order-progress';
 import { money, Product, effectivePrice } from './catalog';
 import {
@@ -43,12 +43,17 @@ import {
   validateCartItems,
 } from '@/lib/inventory-engine';
 import { buildDefaultCategoryTree, CategoryNode, categorySeed, topLevelCategoryNames } from '@/lib/categories';
-import { PAKISTAN_PROVINCES, PAKISTAN_CITIES_BY_PROVINCE, ALL_PAKISTAN_CITIES, cleanPakistanPhone, isValidPakistanPhone } from '@/lib/pakistan-locations';
+import { PAKISTAN_PROVINCES, PAKISTAN_CITIES_BY_PROVINCE, ALL_PAKISTAN_CITIES, POPULAR_PAKISTAN_CITIES, cleanPakistanPhone, isValidPakistanPhone, normalizePakistanPhone, provinceForPakistanCity } from '@/lib/pakistan-locations';
 import type { Settings } from '@/lib/store-data';
 import { parseSavedCart, parseSavedWishlist, saveShoppingData } from '@/lib/shopping-storage';
 import { productImage } from '@/lib/product-image';
+import { calculatePromotions } from '@/lib/promotions';
+import StoreHeader from '@/components/storefront/StoreHeader';
+import StoreFooter from '@/components/storefront/StoreFooter';
+import DealCarousel from '@/components/storefront/DealCarousel';
+import { homepageDeals } from '@/lib/homepage-deals';
 
-type Item = { id: string; qty: number; size: string; color?: string; variantId?: string };
+type Item = { id: string; qty: number; size: string; color?: string; variantId?: string; bundleId?: string };
 const img = (p: Product) => productImage(p.image);
 const hasVariants = (p: Product) => Array.isArray(p.variants) && p.variants.length > 0;
 const sizeOptions = (p: Product) => getSizesForColor(p, undefined, false);
@@ -65,8 +70,15 @@ const addWorkingDays = (date: Date, days: number) => {
   }
   return next;
 };
-const estimatedDelivery = () =>
-  addWorkingDays(new Date(), 3).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+const estimatedDeliveryRange = (city: string) => {
+  if (!city.trim()) return null;
+  const remote = ['Quetta', 'Gwadar', 'Skardu', 'Gilgit', 'Chitral'].some((name) => city.toLowerCase().includes(name.toLowerCase()));
+  const earliest = addWorkingDays(new Date(), remote ? 3 : 2);
+  const latest = addWorkingDays(new Date(), remote ? 6 : 4);
+  const format = (date: Date) => date.toLocaleDateString('en-PK', { month: 'short', day: 'numeric' });
+  return `${format(earliest)}–${format(latest)}`;
+};
+const estimatedDelivery = () => addWorkingDays(new Date(), 3).toLocaleDateString('en-PK', { month: 'short', day: 'numeric' });
 
 function Choice({ value, onChange, items, label }: { value: string; onChange: (v: string) => void; items: string[]; label: string }) {
   return (
@@ -366,11 +378,19 @@ export default function Store({
   const [error, setError] = useState('');
   const [checkoutProvince, setCheckoutProvince] = useState<string>('Punjab');
   const [checkoutCity, setCheckoutCity] = useState<string>('');
-  const [checkoutCustomCity, setCheckoutCustomCity] = useState<string>('');
+  const [phoneValue, setPhoneValue] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [couponOpen, setCouponOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<NonNullable<Settings['coupons']>[number] | null>(null);
+  const [couponMessage, setCouponMessage] = useState('');
   const searchContainerRef = useRef<HTMLDivElement>(null);
+  const checkoutFormRef = useRef<HTMLFormElement>(null);
   const submittingOrder = useRef(false);
+  const checkoutRequestId = useRef('');
 
-  const resolvedTree = categoryTreeNodes && categoryTreeNodes.length ? categoryTreeNodes : buildDefaultCategoryTree();
+  const resolvedTree = useMemo(() => categoryTreeNodes ?? buildDefaultCategoryTree(), [categoryTreeNodes]);
 
   useEffect(() => {
     if (ready) {
@@ -395,7 +415,8 @@ export default function Store({
     n = 1,
     chosenSize?: string,
     chosenColor?: string,
-    chosenVariantId?: string
+    chosenVariantId?: string,
+    chosenBundleId?: string
   ) => {
     const targetColor = chosenColor || p.color;
     const availableSizes = getSizesForColor(p, targetColor, false);
@@ -416,7 +437,7 @@ export default function Store({
     const available = sizeDetail.stock;
     const limit = p.allowBackorders ? 50 : Math.min(10, available);
 
-    const existing = cart.find(i => i.id === p.id && i.size === targetSize &&
+    const existing = cart.find(i => i.id === p.id && i.size === targetSize && i.bundleId === chosenBundleId &&
       (i.color || '').toLowerCase() === (targetColor || '').toLowerCase());
     if (existing && existing.qty >= limit) {
       toast.warning(`Maximum quantity reached (${limit} units).`);
@@ -427,6 +448,7 @@ export default function Store({
         (i) =>
           i.id === p.id &&
           i.size === targetSize &&
+          i.bundleId === chosenBundleId &&
           (!targetColor || (i.color || '').toLowerCase() === targetColor.toLowerCase())
       );
 
@@ -437,7 +459,7 @@ export default function Store({
           return c;
         }
         return c.map((i) =>
-          i === found ? { ...i, qty: newQty, variantId: chosenVariantId || i.variantId } : i
+          i === found ? { ...i, qty: newQty, variantId: chosenVariantId || i.variantId, bundleId: chosenBundleId || i.bundleId } : i
         );
       }
 
@@ -449,6 +471,7 @@ export default function Store({
           size: targetSize,
           color: targetColor,
           variantId: chosenVariantId,
+          bundleId: chosenBundleId,
         },
       ];
     });
@@ -470,7 +493,8 @@ export default function Store({
     const availableStock = detail ? detail.stock : 0;
     const validated = cartValidation.items[index];
     const isAvailable = Boolean(validated?.purchasable && validated.status === 'ok');
-    const unitPrice = validated?.unitPrice ?? 0;
+    const bundle = prod?.bundles?.find((candidate) => candidate.id === i.bundleId);
+    const unitPrice = bundle ? bundle.price / Math.max(1, bundle.quantity) : (validated?.unitPrice ?? 0);
     return {
       ...i,
       product: prod,
@@ -484,23 +508,133 @@ export default function Store({
   const hasInvalidCartItems = cartItemsWithDetails.some((i) => !i.isAvailable || !i.product);
   const lines = cartItemsWithDetails;
   const validLines = cartItemsWithDetails.filter((i) => i.product && i.isAvailable);
+  const summaryLines = Array.from(validLines.reduce((groups, line) => {
+    const color = line.color || line.product?.color || '';
+    const key = [line.id, line.variantId || '', line.size || 'Standard', color.toLowerCase(), line.bundleId || ''].join('|');
+    const existing = groups.get(key);
+    if (existing) {
+      existing.qty += line.qty;
+      existing.sourceIndexes.push(cartItemsWithDetails.indexOf(line));
+    } else {
+      groups.set(key, { ...line, color, qty: line.qty, sourceIndexes: [cartItemsWithDetails.indexOf(line)] });
+    }
+    return groups;
+  }, new Map<string, (typeof validLines)[number] & { sourceIndexes: number[] }>()).values());
   const subtotal = validLines.reduce((a, i) => a + (i.unitPrice || i.product!.price) * i.qty, 0);
-  const delivery = !validLines.length || subtotal >= config.freeThreshold ? 0 : config.deliveryCharge;
+  const automaticPromotion = calculatePromotions(cart, products, config.offers || []);
+  const promotionDiscount = Math.min(subtotal, automaticPromotion.discount);
+  const couponBase = Math.max(0, subtotal - promotionDiscount);
+  const couponIsEligible = Boolean(appliedCoupon && appliedCoupon.status === 'Active' && subtotal >= Number(appliedCoupon.minSpend || 0) && (!appliedCoupon.expiryDate || Date.parse(appliedCoupon.expiryDate) >= Date.now()));
+  const couponDiscount = couponIsEligible && appliedCoupon
+    ? Math.min(couponBase, appliedCoupon.type === 'percentage'
+      ? Math.round(couponBase * Math.min(100, Number(appliedCoupon.value || 0)) / 100)
+      : Number(appliedCoupon.value || 0))
+    : 0;
+  const discountedSubtotal = Math.max(0, subtotal - promotionDiscount - couponDiscount);
+  const delivery = !validLines.length || discountedSubtotal >= config.freeThreshold ? 0 : config.deliveryCharge;
+  const orderTotal = Math.max(0, subtotal - promotionDiscount - couponDiscount + delivery);
+  const whatsAppNumber = String(config.whatsapp || '').replace(/[^0-9]/g, '');
   const count = cart.reduce((a, i) => a + i.qty, 0);
-  const freeThresholdProgress = config.freeThreshold > 0 ? Math.min(100, Math.round((subtotal / config.freeThreshold) * 100)) : 100;
+  const freeThresholdProgress = config.freeThreshold > 0 ? Math.min(100, Math.round((discountedSubtotal / config.freeThreshold) * 100)) : 100;
+  const cityOptions = [
+    ...POPULAR_PAKISTAN_CITIES.filter((city) => ALL_PAKISTAN_CITIES.includes(city)),
+    ...ALL_PAKISTAN_CITIES.filter((city) => !POPULAR_PAKISTAN_CITIES.includes(city)),
+  ];
 
-  const purchasableProducts = filterStorefrontProducts(products);
-  const groupKeys = Array.from(new Set(purchasableProducts.map((p) => p.listingGroup || p.id)));
-  const mainProducts = groupKeys.flatMap((group) => {
-    const groupItems = purchasableProducts.filter((p) => (p.listingGroup || p.id) === group);
-    const parent = groupItems.find((p) => p.id === group);
-    const stocked = parent || groupItems[0];
-    return stocked ? [stocked] : [];
-  });
+  function applyCoupon() {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) {
+      setCouponMessage('Enter a coupon code.');
+      return;
+    }
+    const coupon = (config.coupons || []).find((candidate) => candidate.code.trim().toUpperCase() === code);
+    if (!coupon || coupon.status !== 'Active') {
+      setAppliedCoupon(null);
+      setCouponMessage('This coupon code is invalid or inactive.');
+      return;
+    }
+    if (coupon.expiryDate && Date.parse(coupon.expiryDate) < Date.now()) {
+      setAppliedCoupon(null);
+      setCouponMessage('This coupon code has expired.');
+      return;
+    }
+    if (subtotal < Number(coupon.minSpend || 0)) {
+      setAppliedCoupon(null);
+      setCouponMessage(`Spend ${money(Number(coupon.minSpend || 0))} to use this coupon.`);
+      return;
+    }
+    setCouponInput(coupon.code.toUpperCase());
+    setAppliedCoupon(coupon);
+    setCouponMessage('Coupon applied successfully.');
+  }
 
-  const availableTree = filterAvailableCategoryTree(resolvedTree, purchasableProducts);
-  const rootCategories = topLevelCategoryNames(availableTree);
-  const availableCategoryNames = flattenAvailableNames(availableTree);
+  function changeSummaryQuantity(sourceIndexes: number[], delta: number, currentQty: number, availableStock: number) {
+    if (delta > 0 && currentQty >= availableStock) {
+      toast.warning(`Only ${availableStock} unit(s) available.`);
+      return;
+    }
+    setCart((current) => {
+      const next = [...current];
+      if (delta > 0) {
+        const index = sourceIndexes[0];
+        if (index >= 0 && next[index]) next[index] = { ...next[index], qty: next[index].qty + 1 };
+      } else {
+        const index = [...sourceIndexes].reverse().find((candidate) => next[candidate]?.qty > 0);
+        if (index !== undefined && next[index]) {
+          if (next[index].qty <= 1) next.splice(index, 1);
+          else next[index] = { ...next[index], qty: next[index].qty - 1 };
+        }
+      }
+      return next;
+    });
+  }
+
+  function openWhatsAppOrder() {
+    const form = checkoutFormRef.current;
+    if (!form) return;
+    if (!form.checkValidity()) {
+      form.reportValidity();
+      return;
+    }
+    const data = new FormData(form);
+    const name = String(data.get('name') || '').trim();
+    const phone = normalizePakistanPhone(String(data.get('phone') || ''));
+    const city = checkoutCity.trim();
+    const address = String(data.get('address') || '').trim();
+    if (!name || !phone || !city || address.length < 8) {
+      if (!phone) setPhoneError('Enter a valid mobile number / درست موبائل نمبر درج کریں');
+      setError('Please complete your name, valid phone, city and street address before ordering on WhatsApp.');
+      form.reportValidity();
+      return;
+    }
+    const savedDetails = { name, phone, province: checkoutProvince, city, address, landmark: String(data.get('landmark') || '') };
+    saveShoppingData('cartify-checkout-details', savedDetails);
+    const message = [
+      'Assalam-o-alaikum, I would like to place this order:',
+      `Name: ${name}`,
+      `Phone: ${phone}`,
+      `City: ${city}, ${checkoutProvince}`,
+      `Address: ${address}`,
+      ...summaryLines.map((line) => `• ${line.product!.name} × ${line.qty}${line.size !== 'Standard' ? ` (${line.size})` : ''}${line.color ? ` - ${line.color}` : ''}`),
+      `Total: ${money(orderTotal)}`,
+      'Payment: Cash on Delivery',
+    ].join('\n');
+    window.location.href = `https://wa.me/${whatsAppNumber}?text=${encodeURIComponent(message)}`;
+  }
+
+  const purchasableProducts = useMemo(() => filterStorefrontProducts(products), [products]);
+  const mainProducts = useMemo(() => {
+    const groups = new Map<string, Product>();
+    for (const product of purchasableProducts) {
+      const group = product.listingGroup || product.id;
+      if (!groups.has(group) || product.id === group) groups.set(group, product);
+    }
+    return [...groups.values()];
+  }, [purchasableProducts]);
+
+  const availableTree = useMemo(() => filterAvailableCategoryTree(resolvedTree, purchasableProducts), [resolvedTree, purchasableProducts]);
+  const rootCategories = useMemo(() => topLevelCategoryNames(availableTree), [availableTree]);
+  const availableCategoryNames = useMemo(() => flattenAvailableNames(availableTree), [availableTree]);
   const navCategories = availableTree;
   const productMatchesCategory = (p: Product, name: string) => {
     if (name === 'All products') return true;
@@ -513,6 +647,30 @@ export default function Store({
       const rawCart = parseSavedCart(
         localStorage.getItem('cartify-cart') || localStorage.getItem('zeliy-cart') || '[]'
       );
+      // Carry product selection across frontend origins, then validate it
+      // against this checkout's own catalog before changing the saved bag.
+      const purchaseParams = new URLSearchParams(location.search);
+      const buyId = page === 'checkout' ? purchaseParams.get('buy') : null;
+      if (buyId) {
+        const buyItem = parseSavedCart(JSON.stringify([{
+          id: buyId,
+          qty: Number(purchaseParams.get('qty') || 1),
+          size: purchaseParams.get('size') || 'Standard',
+          color: purchaseParams.get('color') || undefined,
+          variantId: purchaseParams.get('variantId') || undefined,
+        }]))[0];
+        if (buyItem && validateCartItems([buyItem], products).valid) {
+          const existing = rawCart.findIndex(item => item.id === buyItem.id && item.size === buyItem.size && (item.color || '') === (buyItem.color || '') && (item.variantId || '') === (buyItem.variantId || ''));
+          if (existing >= 0) rawCart[existing] = buyItem;
+          else rawCart.push(buyItem);
+          saveShoppingData('cartify-cart', rawCart);
+        } else {
+          toast.error('This selection is unavailable. Please choose an available product or size.');
+        }
+        const cleanedUrl = new URL(location.href);
+        ['buy', 'qty', 'size', 'color', 'variantId'].forEach(key => cleanedUrl.searchParams.delete(key));
+        history.replaceState(history.state, '', cleanedUrl.pathname + cleanedUrl.search + cleanedUrl.hash);
+      }
       const validation = validateCartItems(rawCart, products);
       const validatedItems = validation.items
         .filter((item) => item.purchasable && item.requestedQty > 0)
@@ -521,6 +679,7 @@ export default function Store({
           size: item.size,
           color: item.color,
           variantId: item.variantId,
+          bundleId: rawCart.find((cartItem) => cartItem.id === item.id && cartItem.size === item.size && (cartItem.color || '') === (item.color || '') && (cartItem.variantId || '') === (item.variantId || ''))?.bundleId,
           qty: item.status === 'adjusted' ? item.availableStock : item.requestedQty,
         }));
 
@@ -557,6 +716,20 @@ export default function Store({
         (page !== 'wishlist' || saved.includes(p.id))
     )
     .sort((a, b) => (sort === 'Price: low to high' ? a.price - b.price : sort === 'Price: high to low' ? b.price - a.price : 0));
+
+  const frontProducts = mainProducts;
+  const dealProducts = homepageDeals(products, config.lightningDealProductIds);
+  const clearanceProducts = homepageDeals(products, config.clearanceDealProductIds, true);
+  const interestTabs = [
+    'Recommended',
+    'Beauty & Personal Care',
+    "Women's Clothing",
+    'Home & Kitchen',
+    "Men's Clothing",
+    "Women's Shoes",
+    'Sports & Outdoors',
+    'Office & School',
+  ];
 
   function Card({ p }: { p: Product }) {
     const target = p;
@@ -709,9 +882,41 @@ export default function Store({
     );
   }
 
-  function Summary() {
+  function MarketCard({ p, index }: { p: Product; index: number }) {
+    const priceNow = effectivePrice(p);
+    const oldPrice = p.old || Math.round(priceNow * 1.42);
+    const soldText = p.soldCount || `${Math.max(1, (index % 9) + 1)}k+ sold`;
+    const ratingCount = 38 + ((index * 73) % 5200);
     return (
-      <aside className="bg-slate-50 border border-slate-200 rounded-2xl p-6 h-fit sticky top-24">
+      <article className="temu-card">
+        <a href={'/product/' + p.id} className="temu-card-photo">
+          <img src={img(p)} alt={p.name} loading="lazy" />
+          {(index % 5 === 0 || p.tag) && <span className="temu-ad">AD</span>}
+          {index % 3 === 0 && <span className="temu-deal">Deal</span>}
+        </a>
+        <a href={'/product/' + p.id} className="temu-card-title" title={p.name}>
+          {p.name}
+        </a>
+        <div className="temu-price-line">
+          <strong>Rs.{priceNow.toLocaleString('en-PK')}</strong>
+          <del>{oldPrice.toLocaleString('en-PK')}</del>
+          <span>{soldText}</span>
+        </div>
+        <div className="temu-rating">
+          <span>★★★★★</span>
+          <small>{ratingCount.toLocaleString('en-PK')}</small>
+          <button type="button" aria-label={`Add ${p.name} to cart`} onClick={() => add(p)}>
+            <ShoppingBag size={14} />
+          </button>
+        </div>
+        {p.tag && <div className="temu-store-badge">{p.tag}</div>}
+      </article>
+    );
+  }
+
+  function Summary({ mobile = false }: { mobile?: boolean } = {}) {
+    return (
+      <aside className={`${mobile ? 'checkout-summary-mobile-panel' : ''} bg-slate-50 border border-slate-200 rounded-2xl p-4 md:p-6 h-fit md:sticky md:top-24`}>
         <h2 className="text-xl font-bold text-slate-900 mb-4 pb-3 border-b border-slate-200">
           Order Summary
         </h2>
@@ -721,16 +926,16 @@ export default function Store({
           <div className="flex items-center justify-between text-xs font-semibold mb-1.5">
             <span className="text-slate-700 flex items-center gap-1.5">
               <Truck size={14} className="text-[#203664]" />
-              {subtotal >= config.freeThreshold
+              {discountedSubtotal >= config.freeThreshold
                 ? "🎉 You've unlocked FREE Delivery!"
-                : `Add Rs ${(config.freeThreshold - subtotal).toLocaleString('en-PK')} for FREE Delivery`}
+                : `Add Rs ${(config.freeThreshold - discountedSubtotal).toLocaleString('en-PK')} for FREE Delivery`}
             </span>
             <span className="text-[#203664] font-bold">{freeThresholdProgress}%</span>
           </div>
           <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
-                subtotal >= config.freeThreshold ? 'bg-emerald-500' : 'bg-[#203664]'
+                discountedSubtotal >= config.freeThreshold ? 'bg-emerald-500' : 'bg-[#203664]'
               }`}
               style={{ width: `${freeThresholdProgress}%` }}
             />
@@ -738,13 +943,19 @@ export default function Store({
         </div>
 
         {/* Items line summary */}
-        <div className="space-y-2 mb-4 max-h-56 overflow-y-auto pr-1">
-          {validLines.map((i, n) => (
-            <div className="flex justify-between items-center text-xs text-slate-600" key={n}>
-              <span className="line-clamp-1 max-w-[70%]">
-                {i.product!.name} × {i.qty}
-              </span>
-              <b className="font-semibold text-slate-800">{money((i.unitPrice || i.product!.price) * i.qty)}</b>
+        <div className="space-y-3 mb-4 max-h-64 overflow-y-auto pr-1">
+          {summaryLines.map((line) => (
+            <div className="grid grid-cols-[48px_minmax(0,1fr)_auto] gap-3 items-center text-xs text-slate-600" key={[line.id, line.variantId, line.size, line.color].join('|')}>
+              <img src={img(line.product!)} alt="" loading="lazy" className="w-12 h-12 rounded-lg object-contain bg-white border border-slate-200" />
+              <div className="min-w-0">
+                <span className="block truncate font-semibold text-slate-800">{line.product!.name}</span>
+                <span className="block mt-0.5">× {line.qty} · {money((line.unitPrice || line.product!.price) * line.qty)}</span>
+              </div>
+              <div className="inline-flex items-center rounded-full border border-slate-300 bg-white overflow-hidden">
+                <button type="button" aria-label={`Decrease ${line.product!.name} quantity`} onClick={() => changeSummaryQuantity(line.sourceIndexes, -1, line.qty, line.availableStock)} className="w-9 h-9 grid place-items-center hover:bg-slate-100"><Minus size={13} /></button>
+                <span className="min-w-7 text-center font-bold text-slate-800">{line.qty}</span>
+                <button type="button" aria-label={`Increase ${line.product!.name} quantity`} disabled={line.qty >= line.availableStock} onClick={() => changeSummaryQuantity(line.sourceIndexes, 1, line.qty, line.availableStock)} className="w-9 h-9 grid place-items-center hover:bg-slate-100 disabled:opacity-35"><Plus size={13} /></button>
+              </div>
             </div>
           ))}
         </div>
@@ -760,16 +971,37 @@ export default function Store({
               {delivery ? money(delivery) : <span className="text-emerald-600 font-bold">FREE</span>}
             </span>
           </div>
+          {promotionDiscount > 0 && (
+            <div className="flex justify-between text-emerald-700 font-semibold">
+              <span>Automatic offer</span>
+              <span>-{money(promotionDiscount)}</span>
+            </div>
+          )}
+          {couponDiscount > 0 && appliedCoupon && (
+            <div className="flex justify-between text-emerald-700 font-semibold">
+              <span>Coupon ({appliedCoupon.code.toUpperCase()})</span>
+              <span>-{money(couponDiscount)}</span>
+            </div>
+          )}
           <div className="flex justify-between text-base font-bold text-slate-900 pt-3 border-t border-slate-200">
             <span>Total (PKR)</span>
-            <span className="text-lg text-[#203664]">{money(subtotal + delivery)}</span>
+            <span className="text-lg text-[#203664]">{money(orderTotal)}</span>
           </div>
         </div>
 
-        <p className="text-xs text-slate-500 mt-4 flex items-center gap-1.5 bg-slate-100/70 p-2.5 rounded-lg">
-          <Clock size={14} className="text-slate-500 flex-shrink-0" />
-          <span>Estimated delivery: <b>{estimatedDelivery()}</b> (3 working days)</span>
-        </p>
+        {automaticPromotion.applied.length === 0 && automaticPromotion.rejected.length > 0 && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <b>{automaticPromotion.rejected[0].title}</b>
+            <span className="block mt-0.5">{automaticPromotion.rejected[0].reason}</span>
+          </div>
+        )}
+
+        {estimatedDeliveryRange(checkoutCity) && (
+          <p className="text-xs text-slate-500 mt-4 flex items-center gap-1.5 bg-slate-100/70 p-2.5 rounded-lg">
+            <Clock size={14} className="text-slate-500 flex-shrink-0" />
+            <span>Estimated delivery to {checkoutCity}: <b>{estimatedDeliveryRange(checkoutCity)}</b></span>
+          </p>
+        )}
 
         {page === 'cart' && (
           hasInvalidCartItems ? (
@@ -815,13 +1047,15 @@ export default function Store({
 
     const form = new FormData(e.currentTarget);
     const phoneRaw = String(form.get('phone') || '');
-    const phone = cleanPakistanPhone(phoneRaw);
-    if (!isValidPakistanPhone(phone)) {
-      setError('Please enter a valid Pakistani mobile number (e.g. 0300 1234567).');
+    const phone = normalizePakistanPhone(phoneRaw);
+    if (!phone) {
+      setPhoneError('Enter a valid mobile number / درست موبائل نمبر درج کریں');
+      setError('Please enter a valid Pakistani mobile number.');
       setBusy(false);
       return;
     }
-    const cityVal = checkoutCity === 'Other' ? checkoutCustomCity.trim() : (checkoutCity || String(form.get('city') || '')).trim();
+    setPhoneError('');
+    const cityVal = (checkoutCity || String(form.get('city') || '')).trim();
     if (!cityVal) {
       setError('Please select or enter your city.');
       setBusy(false);
@@ -851,8 +1085,9 @@ export default function Store({
       address: fullAddress,
       landmark,
       postal: String(form.get('postal') || '').trim(),
-      email: String(form.get('email') || '').trim(),
       note: String(form.get('note') || '').trim(),
+      couponCode: appliedCoupon?.code,
+      checkoutRequestId: checkoutRequestId.current || (checkoutRequestId.current = crypto.randomUUID()),
       source: detectedSource,
       paymentMethod: 'cod',
     };
@@ -877,405 +1112,80 @@ export default function Store({
     }
   }
 
+  const megaMenuRoots = availableTree.filter((node) => node.enabled).slice(0, 24);
+  const megaMenuTiles = megaMenuRoots.flatMap((root) => root.children.filter((child) => child.enabled)).slice(0, 25);
+  const categoryImage = (node: CategoryNode) => {
+    if (node.image) return node.image;
+    const match = purchasableProducts.find((item) =>
+      item.category.toLowerCase() === node.name.toLowerCase() ||
+      (item.subcategory || '').toLowerCase() === node.name.toLowerCase()
+    );
+    return match ? img(match) : '';
+  };
+
   const p = products.find((p) => p.id === path[1]);
 
   return (
-    <>
+    <div
+      className={page === 'product' ? 'cartify-storefront marketplace' : 'cartify-storefront'}
+      style={{
+        "--store-primary": config.themePrimaryColor || "#203664",
+        "--store-accent": config.themeAccentColor || "#ff5000",
+        "--store-background": config.themeBackgroundColor || "#ffffff",
+        "--store-text": config.themeTextColor || "#1e293b",
+        "--store-font": config.themeFontFamily || "Inter, Arial, sans-serif",
+        "--store-button-radius": config.themeButtonRadius || "12px",
+        "--store-card-radius": config.themeCardRadius || "16px",
+      } as React.CSSProperties}
+    >
       <Toaster richColors position="bottom-right" />
 
-      {/* Top Announcement Bar */}
-      {config.announcementEnabled !== false && (
-        <div className="bg-[#1b2d54] text-white text-xs font-medium py-2.5 px-4">
-          <div className="wrap flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
-              <Sparkles size={14} className="text-amber-400" />
-              <span>{config.announcementText || "Thoughtful finds. Delivered across Pakistan with Cash on Delivery."}</span>
-            </span>
-            <span className="hidden md:flex items-center gap-2">
-              <Truck size={14} />
-              <span>{config.announcementHighlight || `Free delivery on orders from ${money(config.freeThreshold)}`}</span>
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Main Header */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 transition-shadow">
-        <div className="wrap flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 sm:gap-6 py-4">
-          {/* Logo */}
-          <a href="/" className="flex flex-col group flex-shrink-0">
-            {config.logo ? (
-              <img src={config.logo} alt="Store logo" style={{ maxHeight: 42, maxWidth: 200, objectFit: 'contain' }} />
-            ) : (
-              <span className="text-3xl md:text-[34px] font-black tracking-tight text-slate-900 leading-none">
-                cartify<span className="text-[#bc8053]">.</span>
-                <span className="block text-[9px] tracking-[3px] font-bold text-slate-400 uppercase mt-1">
-                  {config.logoText || 'PAKISTAN'}
-                </span>
-              </span>
-            )}
-          </a>
-
-          {/* Interactive Search Bar with Live Autocomplete */}
-          <div ref={searchContainerRef} className="relative order-last sm:order-none w-full sm:w-auto sm:flex-1 min-w-0 max-w-2xl sm:mx-2">
-            <form
-              className="flex items-center bg-slate-100 hover:bg-slate-100/90 focus-within:bg-white border border-slate-200 focus-within:border-[#203664] focus-within:ring-2 focus-within:ring-[#203664]/10 rounded-full px-4 h-11 transition-all"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setIsSearchFocused(false);
-                location.href = `/products?q=${encodeURIComponent(searchLiveQuery.trim())}`;
-              }}
-            >
-              <Search size={18} className="text-slate-400 flex-shrink-0 mr-2.5" />
-              <input
-                type="text"
-                aria-label="Search products"
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') setIsSearchFocused(false);
-                }}
-                value={searchLiveQuery}
-                onChange={(e) => {
-                  setSearchLiveQuery(e.target.value);
-                  setIsSearchFocused(true);
-                }}
-                onFocus={() => setIsSearchFocused(true)}
-                placeholder="Search products, shoes, bags, skincare..."
-                className="w-full bg-transparent border-0 text-sm text-slate-900 placeholder:text-slate-400 outline-none"
-              />
-              {searchLiveQuery && (
-                <button
-                  type="button"
-                  aria-label="Clear search"
-                  onClick={() => setSearchLiveQuery('')}
-                  className="text-slate-400 hover:text-slate-600 p-1"
-                >
-                  <X size={16} />
-                </button>
-              )}
-              <button
-                type="submit"
-                className="bg-[#203664] hover:bg-[#2b4885] text-white text-xs font-semibold px-4 py-1.5 rounded-full ml-2 transition-all flex-shrink-0"
-              >
-                Search
-              </button>
-            </form>
-
-            {/* Live Autocomplete Dropdown */}
-            {isSearchFocused && searchLiveQuery.trim().length >= 2 && (
-              <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden z-50">
-                <div className="p-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 flex justify-between">
-                  <span>Product Suggestions</span>
-                  <span>{searchSuggestions.length} found</span>
-                </div>
-                {searchSuggestions.length > 0 ? (
-                  <div className="divide-y divide-slate-100">
-                    {searchSuggestions.map((item) => (
-                      <a
-                        key={item.id}
-                        href={`/product/${item.id}`}
-                        className="flex items-center gap-3 p-3 hover:bg-slate-50 transition-colors"
-                        onClick={() => setIsSearchFocused(false)}
-                      >
-                        <img
-                          src={img(item)}
-                          alt={item.name}
-                          className="w-12 h-12 rounded-lg object-contain bg-slate-50 p-1 flex-shrink-0"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-slate-900 line-clamp-1">{item.name}</p>
-                          <p className="text-[11px] text-slate-400">{item.category}</p>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <strong className="text-xs font-bold text-[#203664]">
-                            Rs {effectivePrice(item).toLocaleString('en-PK')}
-                          </strong>
-                        </div>
-                      </a>
-                    ))}
-                    <a
-                      href={`/products?q=${encodeURIComponent(searchLiveQuery.trim())}`}
-                      className="block p-3 text-center text-xs font-bold text-[#203664] hover:bg-slate-50 bg-slate-50/50"
-                      onClick={() => setIsSearchFocused(false)}
-                    >
-                      See all results for &ldquo;{searchLiveQuery}&rdquo; →
-                    </a>
-                  </div>
-                ) : (
-                  <div className="p-6 text-center text-xs text-slate-500">
-                    No matching products found for &ldquo;{searchLiveQuery}&rdquo;
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Header Action Items */}
-          <div className="flex items-center gap-4 md:gap-6">
-            <a
-              href="/account"
-              className="hidden lg:flex items-center gap-2 text-xs font-semibold text-slate-700 hover:text-[#203664] transition-colors"
-            >
-              <User size={20} className="text-slate-600" />
-              <span>Account</span>
-            </a>
-
-            <a
-              href="/track-order"
-              className="hidden md:flex items-center gap-2 text-xs font-semibold text-slate-700 hover:text-[#203664] transition-colors"
-            >
-              <Package size={20} className="text-slate-600" />
-              <span>Track Order</span>
-            </a>
-
-            <a
-              href="/wishlist"
-              aria-label="Wishlist"
-              className="relative p-2 text-slate-700 hover:text-[#203664] transition-colors"
-            >
-              <Heart size={22} />
-              {saved.length > 0 && (
-                <span className="absolute top-0 right-0 bg-[#203664] text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                  {saved.length}
-                </span>
-              )}
-            </a>
-
-            <a
-              href="/cart"
-              aria-label={`Shopping bag, ${count} items`}
-              className="relative flex items-center gap-2.5 bg-slate-100 hover:bg-[#203664] text-slate-800 hover:text-white px-3.5 py-2 rounded-full transition-all"
-            >
-              <div className="relative">
-                <ShoppingBag size={20} />
-                {count > 0 && (
-                  <span className="absolute -top-1.5 -right-2 bg-orange-600 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                    {count}
-                  </span>
-                )}
-              </div>
-              <span className="hidden sm:inline text-xs font-bold">
-                {subtotal > 0 ? money(subtotal) : 'Bag'}
-              </span>
-            </a>
-          </div>
-        </div>
-
-        {/* Secondary Category Navigation Bar */}
-        <nav className="border-t border-slate-100 bg-white relative z-30">
-          <div className="wrap flex items-center gap-6 h-12 text-xs font-semibold text-slate-600 overflow-visible">
-            {/* All Categories: Simple direct link */}
-            <a
-              href="/products"
-              className="flex items-center gap-2 text-slate-900 font-bold pr-4 border-r border-slate-200 flex-shrink-0 hover:text-[#203664] transition-colors"
-            >
-              <Grid2X2 size={16} />
-              <span>All Categories</span>
-            </a>
-
-            {/* Top Level Category Items with Subcategory Dropdowns on Hover */}
-            {navCategories.map((node) => {
-              const activeChildren = node.children.filter((child) => child.enabled);
-              const hasDropdown = activeChildren.length > 0;
-              return (
-                <div className="relative group/cat py-3 flex-shrink-0" key={node.id}>
-                  <a
-                    href={'/products?category=' + encodeURIComponent(node.name)}
-                    className="flex items-center gap-1.5 text-slate-700 font-semibold hover:text-[#203664] transition-colors py-1 px-2 rounded-lg hover:bg-slate-50"
-                  >
-                    <span>{node.name}</span>
-                    {hasDropdown && (
-                      <ChevronDown
-                        size={13}
-                        className="text-slate-400 group-hover/cat:rotate-180 group-hover/cat:text-[#203664] transition-transform duration-200"
-                      />
-                    )}
-                  </a>
-
-                  {hasDropdown && (
-                    <div className="absolute top-full left-0 min-w-[220px] bg-white rounded-2xl shadow-[0_18px_40px_-10px_rgba(32,54,100,0.18)] border border-slate-200/80 p-2.5 opacity-0 invisible group-hover/cat:opacity-100 group-hover/cat:visible -translate-y-1 group-hover/cat:translate-y-0 transition-all duration-200 ease-out z-50 before:absolute before:-top-3 before:left-0 before:right-0 before:h-3 before:content-['']">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-3 py-1.5 border-b border-slate-100 mb-1">
-                        {node.name}
-                      </div>
-
-                      <div className="space-y-0.5">
-                        {activeChildren.map((child) => (
-                          <a
-                            key={child.id}
-                            href={'/products?category=' + encodeURIComponent(child.name)}
-                            className="flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-[#203664] transition-colors group/item"
-                          >
-                            <span className="flex items-center gap-2">
-                              <span className="w-1.5 h-1.5 rounded-full bg-slate-300 group-hover/item:bg-[#203664] transition-colors" />
-                              <span>{child.name}</span>
-                            </span>
-                            <ChevronRight size={13} className="text-slate-400 group-hover/item:text-[#203664] group-hover/item:translate-x-0.5 transition-transform" />
-                          </a>
-                        ))}
-                      </div>
-
-                      <div className="pt-1.5 mt-1.5 border-t border-slate-100">
-                        <a
-                          href={'/products?category=' + encodeURIComponent(node.name)}
-                          className="flex items-center justify-between px-3 py-1.5 rounded-xl text-[11px] font-bold text-[#203664] hover:bg-blue-50/60 transition-colors"
-                        >
-                          <span>View all in {node.name}</span>
-                          <ArrowRight size={12} />
-                        </a>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            <a
-              href="/products"
-              className="ml-auto flex-shrink-0 flex items-center gap-1.5 text-orange-600 font-bold bg-orange-50 hover:bg-orange-100 px-3 py-1 rounded-full transition-colors"
-            >
-              <Flame size={14} className="fill-orange-500" />
-              <span>Hot Deals</span>
-              <span className="bg-orange-600 text-white text-[9px] font-black px-1.5 py-0.2 rounded">SALE</span>
-            </a>
-          </div>
-        </nav>
-      </header>
+      <StoreHeader config={config} megaMenuRoots={megaMenuRoots} megaMenuTiles={megaMenuTiles}
+        categoryImage={categoryImage} searchContainerRef={searchContainerRef}
+        isSearchFocused={isSearchFocused} setIsSearchFocused={setIsSearchFocused}
+        searchLiveQuery={searchLiveQuery} setSearchLiveQuery={setSearchLiveQuery}
+        searchSuggestions={searchSuggestions} count={count} />
 
       {/* Main Content Area */}
       <main className="min-h-screen pb-16">
         {page === 'home' ? (
           <>
-            {/* Homepage Banner & Carousel Section */}
-            <HeroBannerCarousel config={config} />
-
-            {/* Trending Deals Carousel */}
-            <div className="mt-8">
-              <ProductCarousel
-                products={mainProducts}
-                title="Trending Deals & Popular Picks"
-                subtitle="Flash discounts on top-rated fashion, bags & footwear"
-              />
-            </div>
-
-            {/* Trust Benefits Bar */}
-            <section className="wrap my-8">
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-50 border border-slate-200/80 rounded-2xl p-6">
-                <div className="flex items-center gap-3.5 p-2">
-                  <div className="w-11 h-11 rounded-xl bg-blue-100 text-[#203664] flex items-center justify-center flex-shrink-0">
-                    <Truck size={22} />
-                  </div>
-                  <div>
-                    <b className="text-xs md:text-sm font-bold text-slate-900 block">Nationwide Delivery</b>
-                    <small className="text-[11px] text-slate-500 block">TCS, Leopards & Trax</small>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3.5 p-2">
-                  <div className="w-11 h-11 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center flex-shrink-0">
-                    <ShoppingBag size={22} />
-                  </div>
-                  <div>
-                    <b className="text-xs md:text-sm font-bold text-slate-900 block">Cash on Delivery</b>
-                    <small className="text-[11px] text-slate-500 block">Pay at your doorstep</small>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3.5 p-2">
-                  <div className="w-11 h-11 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center flex-shrink-0">
-                    <RotateCcw size={22} />
-                  </div>
-                  <div>
-                    <b className="text-xs md:text-sm font-bold text-slate-900 block">7-Day Easy Returns</b>
-                    <small className="text-[11px] text-slate-500 block">Hassle-free exchanges</small>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3.5 p-2">
-                  <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center flex-shrink-0">
-                    <ShieldCheck size={22} />
-                  </div>
-                  <div>
-                    <b className="text-xs md:text-sm font-bold text-slate-900 block">100% Authentic</b>
-                    <small className="text-[11px] text-slate-500 block">Curated quality in PKR</small>
-                  </div>
-                </div>
+            <section className="temu-shell">
+              <div className="temu-security">
+                <span><ShieldCheck size={13} /> Why choose Temu?</span>
+                <span><ShieldCheck size={13} /> Secure privacy</span>
+                <span><ShieldCheck size={13} /> Safe payments</span>
+                <span><Truck size={13} /> Delivery guarantee <ChevronRight size={12} /></span>
               </div>
-            </section>
-
-            {/* Shop by Category Section */}
-            <section className="wrap my-10">
-              <div className="flex justify-between items-end mb-6">
-                <div>
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    FIND YOUR NEXT FAVOURITE
-                  </span>
-                  <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900">
-                    Shop by category
-                  </h2>
-                </div>
-                <a
-                  href="/products"
-                  className="text-xs md:text-sm font-bold text-[#203664] hover:underline flex items-center gap-1"
-                >
-                  <span>View all categories</span>
-                  <ArrowRight size={15} />
-                </a>
+              <div className="temu-warning">
+                <b>Security reminder:</b> Please be wary of scam messages and links. We will not ask for extra fees via SMS or email.
+                <a href="/products">View</a>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
-                {rootCategories.map((c) => {
-                  const cp = mainProducts.find((p) => p.category === c || p.subcategory === c);
-                  if (!cp) return null;
-                  return (
-                    <a
-                      href={'/products?category=' + encodeURIComponent(c)}
-                      key={c}
-                      className="group bg-white border border-slate-200/90 hover:border-slate-300 rounded-2xl p-4 flex flex-col items-center text-center hover:shadow-lg transition-all duration-300"
-                    >
-                      <div className="w-full aspect-square rounded-xl bg-slate-50 overflow-hidden flex items-center justify-center p-3 mb-3">
-                        <img
-                          src={img(cp)}
-                          alt={c}
-                          className="w-full h-full object-contain mix-blend-multiply group-hover:scale-110 transition-transform duration-300"
-                        />
-                      </div>
-                      <b className="text-sm font-bold text-slate-900 group-hover:text-[#203664] transition-colors line-clamp-1">
-                        {c}
-                      </b>
-                      <span className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-0.5">
-                        <span>Explore</span>
-                        <ChevronRight size={12} />
-                      </span>
-                    </a>
-                  );
-                })}
-              </div>
-            </section>
-
-            {/* Everyday Favourites Product Grid */}
-            <section className="wrap my-10">
-              <div className="flex justify-between items-end mb-6">
-                <div>
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    TOP PICKS FOR YOU
-                  </span>
-                  <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900">
-                    Your everyday favourites
-                  </h2>
-                </div>
-                <a
-                  href="/products"
-                  className="text-xs md:text-sm font-bold text-[#203664] hover:underline flex items-center gap-1"
-                >
-                  <span>Shop all</span>
-                  <ArrowRight size={15} />
-                </a>
+              <div className="temu-deal-board">
+                <DealCarousel products={dealProducts} title="LIGHTNING DEALS" />
+                <DealCarousel products={clearanceProducts} title="CLEARANCE DEALS" clearance />
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
-                {mainProducts.slice(0, 8).map((p) => (
-                  <Card key={p.id} p={p} />
+              <div className="temu-tax"><ShieldCheck size={18} /> Tax & Customs Policy <b>Hassle-free tax service</b> <ChevronRight size={15} /></div>
+
+              <div className="temu-interest-head">
+                <span>AUTUMN EDITION</span>
+                <h1>EXPLORE YOUR INTERESTS</h1>
+              </div>
+              <div className="temu-tabs">
+                {interestTabs.map((tab) => (
+                  <a href="/products" key={tab}>{tab}</a>
+                ))}
+                <button type="button" aria-label="Next category"><ChevronRight size={16} /></button>
+              </div>
+
+              <div className="temu-grid">
+                {frontProducts.map((p, index) => (
+                  <MarketCard key={`${p.id}-market-${index}`} p={p} index={index} />
                 ))}
               </div>
+
             </section>
           </>
         ) : page === 'products' || page === 'wishlist' ? (
@@ -1367,7 +1277,7 @@ export default function Store({
               setSize={setSize}
               saved={saved.includes(p.id)}
               favorite={() => favorite(p.id)}
-              add={() => add(p, qty, size, p.color)}
+              add={(quantity = qty, bundleId, color, variantId) => add(p, quantity, size, color || p.color, variantId, bundleId)}
               buy={() => {
                 const targetColor = p.color;
                 const targetSize = hasSizes(p) ? size : 'Standard';
@@ -1410,7 +1320,7 @@ export default function Store({
                     <h2 className="text-2xl font-extrabold text-slate-900">You might also like</h2>
                   </div>
                   <a
-                    href="/products"
+                    href="/"
                     className="text-xs font-bold text-[#203664] hover:underline flex items-center gap-1"
                   >
                     <span>Shop all</span>
@@ -1681,7 +1591,7 @@ export default function Store({
                     </div>
                   ) : (
                     /* Checkout Form */
-                    <form className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-5" onSubmit={checkout}>
+                    <form ref={checkoutFormRef} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-5" onSubmit={checkout}>
                       {/* COD Banner */}
                       <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800">
                         <b className="flex items-center gap-2 text-sm font-bold text-emerald-900">
@@ -1697,60 +1607,56 @@ export default function Store({
                         Delivery Details / ڈیلیوری کی معلومات
                       </h2>
 
-                      <label className="block text-xs font-bold text-slate-700 space-y-1.5">
-                        <span>Full name / پورا نام *</span>
-                        <input
-                          name="name"
-                          required
-                          minLength={2}
-                          maxLength={80}
-                          autoComplete="name"
-                          placeholder="e.g. Muhammad Ali"
-                          className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
-                        />
-                      </label>
-
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <label className="block text-xs font-bold text-slate-700 space-y-1.5">
-                          <span>Mobile number / موبائل نمبر *</span>
-                          <div className="flex gap-2">
-                            <span className="flex items-center px-3 bg-slate-100 border border-slate-300 rounded-lg text-xs font-bold text-slate-700">
-                              🇵🇰 +92
-                            </span>
-                            <input
-                              name="phone"
-                              required
-                              type="tel"
-                              pattern="(03[0-9]{9}|[+]923[0-9]{9}|3[0-9]{9})"
-                              placeholder="0300 1234567"
-                              className="flex-1 px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
-                            />
-                          </div>
+                          <span>Full name / پورا نام *</span>
+                          <input
+                            name="name"
+                            required
+                            minLength={2}
+                            maxLength={80}
+                            autoComplete="name"
+                            placeholder="e.g. Muhammad Ali"
+                            className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
+                          />
                         </label>
 
                         <label className="block text-xs font-bold text-slate-700 space-y-1.5">
-                          <span>Email (optional)</span>
+                          <span>Mobile number / موبائل نمبر *</span>
                           <input
-                            name="email"
-                            type="email"
-                            maxLength={100}
-                            placeholder="you@example.com"
-                            className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
+                            name="phone"
+                            required
+                            type="tel"
+                            inputMode="numeric"
+                            maxLength={11}
+                            pattern="03[0-9]{9}"
+                            title="Enter an 11-digit Pakistani mobile number starting with 03"
+                            placeholder="0300 1234567"
+                            value={phoneValue}
+                            onChange={(event) => {
+                              const next = event.target.value.replace(/\D/g, '').slice(0, 11);
+                              setPhoneValue(next);
+                              setPhoneError(next && !isValidPakistanPhone(next) ? 'Enter 11 digits starting with 03.' : '');
+                            }}
+                            aria-invalid={Boolean(phoneError)}
+                            aria-describedby="checkout-phone-help"
+                            className={`w-full px-3.5 py-2.5 rounded-lg border text-sm focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none ${phoneError ? 'border-rose-500' : 'border-slate-300'}`}
                           />
+                          {phoneError && <small id="checkout-phone-help" className="text-rose-600">{phoneError}</small>}
                         </label>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <label className="block text-xs font-bold text-slate-700 space-y-1.5">
-                          <span>Province / صوبہ *</span>
+                        <label className="block text-xs font-bold text-slate-700 space-y-1.5" htmlFor="checkout-province">
+                          <span className="block">Province / <span lang="ur" dir="rtl" className="urdu-label">صوبہ</span> *</span>
                           <select
+                            id="checkout-province"
                             name="state"
                             required
                             value={checkoutProvince}
                             onChange={(e) => {
                               setCheckoutProvince(e.target.value);
                               setCheckoutCity('');
-                              setCheckoutCustomCity('');
                             }}
                             className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm bg-white focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
                           >
@@ -1762,45 +1668,29 @@ export default function Store({
                           </select>
                         </label>
 
-                        <label className="block text-xs font-bold text-slate-700 space-y-1.5">
-                          <span>City / شہر *</span>
-                          <select
+                        <label className="block text-xs font-bold text-slate-700 space-y-1.5" htmlFor="checkout-city">
+                          <span className="block">City / <span lang="ur" dir="rtl" className="urdu-label">شہر</span> *</span>
+                          <input
+                            id="checkout-city"
                             name="city"
                             required
+                            list="pakistan-cities"
                             value={checkoutCity}
                             onChange={(e) => {
-                              setCheckoutCity(e.target.value);
-                              if (e.target.value !== 'Other') {
-                                setCheckoutCustomCity('');
-                              }
+                              const city = e.target.value;
+                              setCheckoutCity(city);
+                              const detectedProvince = provinceForPakistanCity(city);
+                              if (detectedProvince) setCheckoutProvince(detectedProvince);
                             }}
+                            placeholder="Search or type your city"
+                            autoComplete="address-level2"
                             className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm bg-white focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
-                          >
-                            <option value="">Select City / شہر منتخب کریں</option>
-                            {(PAKISTAN_CITIES_BY_PROVINCE[checkoutProvince] || ALL_PAKISTAN_CITIES).map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                            <option value="Other">Other City / دوسرا شہر</option>
-                          </select>
+                          />
+                          <datalist id="pakistan-cities">
+                            {cityOptions.map((city) => <option key={city} value={city} />)}
+                          </datalist>
                         </label>
                       </div>
-
-                      {checkoutCity === 'Other' && (
-                        <label className="block text-xs font-bold text-slate-700 space-y-1.5">
-                          <span>Enter City Name / شہر کا نام *</span>
-                          <input
-                            name="customCity"
-                            required
-                            value={checkoutCustomCity}
-                            onChange={(e) => setCheckoutCustomCity(e.target.value)}
-                            placeholder="Type your city or town name"
-                            autoFocus
-                            className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
-                          />
-                        </label>
-                      )}
 
                       <label className="block text-xs font-bold text-slate-700 space-y-1.5">
                         <span>Street address / مکمل پتہ *</span>
@@ -1813,6 +1703,7 @@ export default function Store({
                           className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-sm focus:border-[#203664] focus:ring-2 focus:ring-[#203664]/10 outline-none"
                         />
                       </label>
+                      <p className="-mt-3 text-xs text-slate-500">Include house/flat number, street, area and a nearby landmark to help the courier find you.</p>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <label className="block text-xs font-bold text-slate-700 space-y-1.5">
@@ -1862,6 +1753,7 @@ export default function Store({
                           </p>
                         </div>
                       </div>
+                      <p className="flex items-center gap-2 text-xs font-medium text-slate-600"><Phone size={15} className="text-emerald-600" /> We’ll confirm your order by call or WhatsApp before dispatch.</p>
 
                       {error && (
                         <p role="alert" className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-lg font-medium">
@@ -1869,16 +1761,29 @@ export default function Store({
                         </p>
                       )}
 
-                      <button
-                        type="submit"
-                        disabled={busy}
-                        className="w-full py-4 px-6 bg-[#203664] hover:bg-[#2c4985] text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all text-base disabled:opacity-60"
-                      >
-                        <span>
-                          {busy ? 'Saving your order…' : `Place Order (Cash on Delivery) · ${money(subtotal + delivery)}`}
-                        </span>
-                        <ArrowRight size={18} />
-                      </button>
+                      <div className="checkout-order-actions flex flex-col gap-2.5 pt-1">
+                        <button
+                          type="submit"
+                          disabled={busy}
+                          style={{ backgroundColor: '#ff5708', color: '#ffffff', borderRadius: 9999 }}
+                          className="checkout-complete-order w-full min-h-[52px] px-6 active:scale-[0.99] text-white rounded-full flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60 disabled:cursor-wait"
+                        >
+                          {busy && <Clock size={19} className="animate-spin" />}
+                          <span className="text-base font-bold tracking-wide">
+                            {busy ? 'Placing Order…' : 'Complete Order'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={openWhatsAppOrder}
+                          disabled={busy}
+                          style={{ backgroundColor: '#25d366', color: '#ffffff', borderRadius: 9999 }}
+                          className="checkout-whatsapp-order w-full min-h-[52px] px-6 active:scale-[0.99] text-white rounded-full flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
+                        >
+                          <MessageCircle size={21} strokeWidth={2.5} />
+                          <span className="text-base font-bold">Order via WhatsApp</span>
+                        </button>
+                      </div>
                     </form>
                   )}
                 </div>
@@ -2047,115 +1952,8 @@ export default function Store({
         )}
       </main>
 
-      {/* Modern Multi-Column Footer */}
-      <footer className="bg-[#172544] text-white pt-14 pb-8 border-t border-slate-800">
-        <div className="wrap grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-8 pb-12 border-b border-white/10">
-          {/* Col 1: Brand */}
-          <div className="lg:col-span-4 space-y-4">
-            <a href="/" className="inline-block">
-              <span className="text-3xl font-black tracking-tight text-white leading-none">
-                cartify<span className="text-amber-400">.</span>
-                <span className="block text-[8px] tracking-[3px] font-bold text-slate-400 uppercase mt-1">
-                  PAKISTAN
-                </span>
-              </span>
-            </a>
-            <p className="text-xs text-slate-300 leading-relaxed max-w-sm">
-              Thoughtful finds and everyday essentials delivered across Pakistan. Browse in Pakistani Rupees with verified quality and cash on delivery.
-            </p>
-            <div className="flex items-center gap-2 text-xs text-slate-300 font-semibold pt-1">
-              <MapPin size={15} className="text-amber-400" />
-              <span>Pakistan • PKR</span>
-            </div>
-            <div className="inline-block bg-white/10 border border-white/20 text-amber-300 text-[10px] font-bold tracking-wider px-2.5 py-1 rounded">
-              CASH ON DELIVERY (COD)
-            </div>
-          </div>
-
-          {/* Col 2: Categories */}
-          <div className="lg:col-span-3 space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Explore Catalog
-            </h3>
-            <ul className="space-y-2 text-xs text-slate-300 font-medium">
-              {rootCategories.map((c) => (
-                <li key={c}>
-                  <a
-                    href={'/products?category=' + encodeURIComponent(c)}
-                    className="hover:text-white transition-colors"
-                  >
-                    {c}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          {/* Col 3: Customer Care */}
-          <div className="lg:col-span-3 space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Customer Support
-            </h3>
-            <ul className="space-y-2 text-xs text-slate-300 font-medium">
-              <li>
-                <a href="/track-order" className="hover:text-white transition-colors">
-                  Track Your Order
-                </a>
-              </li>
-              <li>
-                <a href="/delivery" className="hover:text-white transition-colors">
-                  Delivery Information
-                </a>
-              </li>
-              <li>
-                <a href="/returns" className="hover:text-white transition-colors">
-                  Returns & Exchanges
-                </a>
-              </li>
-              <li>
-                <a href="/faq" className="hover:text-white transition-colors">
-                  Frequently Asked Questions
-                </a>
-              </li>
-              <li>
-                <a href="/contact-us" className="hover:text-white transition-colors">
-                  Contact Us
-                </a>
-              </li>
-            </ul>
-          </div>
-
-          {/* Col 4: About Cartify */}
-          <div className="lg:col-span-2 space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              About Us
-            </h3>
-            <ul className="space-y-2 text-xs text-slate-300 font-medium">
-              <li>
-                <a href="/about" className="hover:text-white transition-colors">
-                  Our Story
-                </a>
-              </li>
-              <li>
-                <a href="/privacy" className="hover:text-white transition-colors">
-                  Privacy Policy
-                </a>
-              </li>
-              <li>
-                <a href="/admin/login" className="text-amber-400 hover:underline">
-                  Staff Admin Login
-                </a>
-              </li>
-            </ul>
-          </div>
-        </div>
-
-        {/* Footer Bottom Bar */}
-        <div className="wrap pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-400 font-medium">
-          <span>© 2026 Cartify Pakistan. All rights reserved.</span>
-          <span>Sample products & prices • Test orders preview</span>
-        </div>
-      </footer>
+      <>
+      <StoreFooter rootCategories={rootCategories} />
 
       {/* Mobile Sticky Bottom Tab Bar */}
       <nav className="mobile-tabbar" aria-label="Mobile app navigation">
@@ -2182,7 +1980,8 @@ export default function Store({
           {count > 0 && <sup>{count}</sup>}
         </a>
       </nav>
-    </>
+      </>
+    </div>
   );
 }
 

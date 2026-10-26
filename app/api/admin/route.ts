@@ -1,22 +1,28 @@
-import { actor, actorGuard, audit, fail, origin, sql } from '@/lib/access/server';
+import { actor, actorGuard, audit, body, fail, origin, sql } from '@/lib/access/server';
+import { adminTransaction } from '@/lib/admin-transaction';
+import { restoreStock } from '@/lib/restore-stock';
+import { digest } from '@/lib/access/crypto';
 import { has } from '@/lib/access/policy';
 import {
   database,
   catalog,
-  categoryTree,
+  categoryTreeForAdmins,
+  syncCategoryAvailability,
   settings,
   ensureInventoryTables,
   getInventoryLogs,
   ensureReturnTables,
   getReturnRequests,
-  saveReturnRequest,
 } from '@/lib/store-data';
 import type { ReturnRequest, ReturnItem, ReturnTimelineEntry } from '@/lib/return-types';
 import { z } from 'zod';
 import { categories } from '@/app/catalog';
+import { tenantForRequest } from '@/lib/multitenant';
 
 const reply = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
+
+const storefrontLink = z.string().max(500).refine(value => !value || /^\/(?!\/)[^\s\\]*$/.test(value) || /^https?:\/\/[^\s\\]+$/.test(value), 'Use a store path or a valid HTTP/HTTPS link.');
 
 const imageValue = z
   .string()
@@ -33,6 +39,7 @@ const imageValue = z
 const seoSchema = z
   .object({
     title: z.string().max(160).optional(),
+    slug: z.string().max(160).optional(),
     titleUrdu: z.string().max(160).optional(),
     keywords: z.string().max(1000).optional(),
     keywordsUrdu: z.string().max(1000).optional(),
@@ -121,6 +128,7 @@ const variantOptionTypeSchema = z.object({
 const productSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]{1,100}$/),
+    _revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     name: z.string().trim().min(2).max(150),
     category: z.string().trim().min(2).max(80),
     subcategory: z.string().trim().max(80).optional(),
@@ -157,6 +165,7 @@ const productSchema = z
     deal: dealSchema,
     image: imageValue,
     images: z.array(imageValue).max(50).optional(),
+    colorGalleries: z.record(z.string().max(80), z.object({ mainImage: imageValue.optional(), images: z.array(imageValue).max(50) })).optional(),
     tag: z.string().max(60).optional(),
     description: z.string().trim().max(10000).optional().default(''),
     features: z.array(z.string().trim().min(1).max(180)).max(20).optional(),
@@ -179,13 +188,15 @@ const settingSchema = z.object({
   whatsapp: z.string().regex(/^(923\d{9})?$/),
   logo: z.string().max(2000000).optional(),
   logoText: z.string().max(80).optional(),
+  lightningDealProductIds: z.array(z.string().min(1).max(200)).max(100).refine(ids => new Set(ids).size === ids.length, 'Duplicate products are not allowed').optional(),
+  clearanceDealProductIds: z.array(z.string().min(1).max(200)).max(100).refine(ids => new Set(ids).size === ids.length, 'Duplicate products are not allowed').optional(),
   // Banner & Carousel fields
   banners: z
     .array(
       z.object({
         id: z.string().max(100),
         image: z.string().max(5000000),
-        link: z.string().max(500).optional(),
+        link: storefrontLink.optional(),
         alt: z.string().max(200).optional(),
       })
     )
@@ -194,20 +205,20 @@ const settingSchema = z.object({
   bannerAutoplay: z.boolean().optional(),
   bannerInterval: z.number().min(2).max(60).optional(),
   bannerImage: z.string().max(5000000).optional(),
-  bannerLink: z.string().max(500).optional(),
+  bannerLink: storefrontLink.optional(),
   // Coupons, Offers & Information Pages
   coupons: z
     .array(
       z.object({
         id: z.string().max(100),
-        code: z.string().max(50),
+        code: z.string().trim().min(2).max(50),
         type: z.enum(["percentage", "fixed"]),
-        value: z.number().min(0),
+        value: z.number().min(0).max(10000000),
         minSpend: z.number().min(0).optional(),
         status: z.enum(["Active", "Inactive"]),
         usageCount: z.number().min(0).optional(),
         expiryDate: z.string().max(50).optional(),
-      })
+      }).refine(coupon => coupon.type !== 'percentage' || coupon.value <= 100, 'Percentage discounts cannot exceed 100%.')
     )
     .max(50)
     .optional(),
@@ -218,11 +229,21 @@ const settingSchema = z.object({
         title: z.string().max(200),
         tagline: z.string().max(300),
         discountType: z.enum(["percentage", "fixed", "bundle"]),
-        discountValue: z.number().min(0),
+        discountValue: z.number().min(0).max(10000000),
         minQuantity: z.number().min(1).optional(),
         badgeText: z.string().max(50).optional(),
         enabled: z.boolean(),
-      })
+        status: z.enum(["Draft", "Scheduled", "Active", "Paused", "Expired"]).optional(),
+        startAt: z.string().max(80).optional(),
+        endAt: z.string().max(80).optional(),
+        maxDiscount: z.number().min(0).max(10000000).optional(),
+        priority: z.number().int().min(0).max(100000).optional(),
+        stackable: z.boolean().optional(),
+        eligibleProductIds: z.array(z.string().max(120)).max(500).optional(),
+        eligibleCategories: z.array(z.string().max(120)).max(100).optional(),
+        usageLimit: z.number().int().min(0).max(100000000).optional(),
+        perCustomerLimit: z.number().int().min(0).max(100000).optional(),
+      }).refine(offer => offer.discountType !== 'percentage' || offer.discountValue <= 100, 'Percentage discounts cannot exceed 100%.')
     )
     .max(30)
     .optional(),
@@ -248,42 +269,52 @@ const settingSchema = z.object({
   heroSubtitle: z.string().max(500).optional(),
   heroImage: z.string().max(2000000).optional(),
   heroButtonText: z.string().max(80).optional(),
-  heroButtonLink: z.string().max(300).optional(),
+  heroButtonLink: storefrontLink.optional(),
   heroSecondaryButtonText: z.string().max(80).optional(),
-  heroSecondaryButtonLink: z.string().max(300).optional(),
+  heroSecondaryButtonLink: storefrontLink.optional(),
   heroTrustRating: z.string().max(100).optional(),
   promoBanner1Kicker: z.string().max(100).optional(),
   promoBanner1Title: z.string().max(200).optional(),
   promoBanner1ButtonText: z.string().max(80).optional(),
-  promoBanner1Link: z.string().max(300).optional(),
+  promoBanner1Link: storefrontLink.optional(),
   promoBanner1Image: z.string().max(2000000).optional(),
   promoBanner1Enabled: z.boolean().optional(),
   promoBanner2Kicker: z.string().max(100).optional(),
   promoBanner2Title: z.string().max(200).optional(),
   promoBanner2ButtonText: z.string().max(80).optional(),
-  promoBanner2Link: z.string().max(300).optional(),
+  promoBanner2Link: storefrontLink.optional(),
   promoBanner2Image: z.string().max(2000000).optional(),
   promoBanner2Enabled: z.boolean().optional(),
+  themePrimaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  themeAccentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  themeBackgroundColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  themeTextColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  themeFontFamily: z.enum(['Inter, Arial, sans-serif', 'Georgia, serif', 'Verdana, sans-serif', 'system-ui, sans-serif']).optional(),
+  themeButtonRadius: z.enum(['6px', '12px', '20px', '999px']).optional(),
+  themeCardRadius: z.enum(['8px', '16px', '24px']).optional(),
 });
 
-export async function GET() {
+export async function GET(req?: Request) {
   try {
     const u = await actor('content.edit');
+    const tenant = await tenantForRequest(u, req ? new URL(req.url).searchParams.get('tenant') : null);
     await ensureInventoryTables();
+
     await ensureReturnTables();
     const [products, config, categoryData, rows, returnRequests] = await Promise.all([
       catalog(true),
       settings(),
-      categoryTree(),
+      categoryTreeForAdmins(),
       has(u, 'orders.manage')
         ? database()
-            .prepare('SELECT id, details, items, total, status, created_at FROM orders ORDER BY created_at DESC LIMIT 1000')
+            .prepare("SELECT id, details, items, total, status, created_at FROM orders WHERE json_extract(details, '$.tenantId') = ? OR (json_extract(details, '$.tenantId') IS NULL AND ? = 'zeliy-pakistan') ORDER BY created_at DESC LIMIT 1000")
+            .bind(tenant.id, tenant.id)
             .all()
         : Promise.resolve({ results: [] }),
       has(u, 'orders.manage') ? getReturnRequests(1000) : Promise.resolve([]),
     ]);
     return reply({
-      products,
+      products: await Promise.all(products.map(async product => ({ ...product, _revision: await digest(JSON.stringify(product)) }))),
       settings: config,
       categories: categoryData,
       name: u.name,
@@ -305,10 +336,11 @@ export async function POST(req: Request) {
   try {
     origin(req);
     const u = await actor('content.edit');
-    const raw = await req.text();
-    if (raw.length > 3000000) return reply({ error: 'Request too large.' }, 413);
-    const data = JSON.parse(raw);
+    const tenant = await tenantForRequest(u, new URL(req.url).searchParams.get('tenant'));
+    const tx = adminTransaction(u, tenant.id);
+    const data = z.object({ action: z.string() }).passthrough().parse(await body(req, 3000000));
     await ensureInventoryTables();
+    if (String(data.action).includes('return') || data.action === 'process-refund') await ensureReturnTables();
 
     // 1. Delete Product
     if (data.action === 'delete-product') {
@@ -318,23 +350,45 @@ export async function POST(req: Request) {
         sql('INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status', id, '{}', 'Deleted'),
         await audit(u, 'content.product_deleted', id, 'Product deleted'),
       ]);
+      await syncCategoryAvailability();
       return reply({ ok: true });
     }
 
     // 2. Save Product & Record Inventory Adjustments
     if (data.action === 'product') {
-      const p = productSchema.parse(data.product);
-      const current = await catalog(true);
+      const { _revision, ...p } = productSchema.parse(data.product);
+      const current = await tx.catalog();
       const existing = current.find((x) => x.id === p.id);
+      if (_revision && (!existing || _revision !== await digest(JSON.stringify(existing)))) return reply({ error: 'This product changed since you opened it. Refresh before saving to protect recent stock and product updates.' }, 409);
 
-      if (current.some((x) => x.id === p.id && x.category !== p.category)) {
-        return reply({ error: 'Category cannot be changed after creation because it determines product sizes.' }, 400);
-      }
-      if (p.sku && current.some((x) => x.id !== p.id && (x.sku || '').trim().toLowerCase() === p.sku!.trim().toLowerCase())) {
-        return reply({ error: `SKU "${p.sku}" is already assigned to another product. Each product SKU must be unique.` }, 400);
+      const normalizeSku = (value: string | undefined) => value?.trim().toLowerCase() || '';
+      const submittedSkus = [p.sku, ...(p.variants || []).map((variant) => variant.sku)]
+        .map(normalizeSku)
+        .filter(Boolean);
+      const duplicateSubmittedSku = submittedSkus.find((value, index) => submittedSkus.indexOf(value) !== index);
+      if (duplicateSubmittedSku) {
+        return reply({ error: `SKU "${duplicateSubmittedSku}" is duplicated in this product. Every SKU must be unique.` }, 400);
       }
 
-      const mergedProduct = { ...existing, ...p };
+      const catalogSkus = new Map<string, string>();
+      for (const product of current) {
+        if (product.id === p.id) continue;
+        for (const value of [product.sku, ...(product.variants || []).map((variant) => variant.sku)]) {
+          const normalized = normalizeSku(value);
+          if (normalized) catalogSkus.set(normalized, value!.trim());
+        }
+      }
+      const conflictingSku = submittedSkus.find((value) => catalogSkus.has(value));
+      if (conflictingSku) {
+        return reply({ error: `SKU "${catalogSkus.get(conflictingSku) || conflictingSku}" is already assigned in the catalog. Every SKU must be unique.` }, 400);
+      }
+
+      // A saved non-bundle pricing mode must clear any previous bundle tiers.
+      // Otherwise old bundle data can keep the storefront in bundle mode.
+      const persistedProduct = p.pricingType === 'bundle'
+        ? p
+        : { ...p, pricingType: 'offer' as const, bundles: [] };
+      const mergedProduct = { ...existing, ...persistedProduct };
       const statements = [...actorGuard(u)];
       const nowIso = new Date().toISOString();
 
@@ -389,23 +443,18 @@ export async function POST(req: Request) {
       }
 
       statements.push(
-        sql(
-          'INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status=excluded.status',
-          p.id,
-          JSON.stringify(mergedProduct),
-          p.status
-        )
+        tx.product(mergedProduct)
       );
       statements.push(await audit(u, 'content.product_saved', p.id, 'Product saved', { status: p.status, price: p.price }));
 
-      await database().batch(statements);
-      return reply({ ok: true });
+      await tx.commit(statements);
+      return reply({ ok: true, productRevision: await digest(JSON.stringify(mergedProduct)) });
     }
 
     // 3. Link Variants
     if (data.action === 'link-variants') {
       const input = variantLinkSchema.parse(data);
-      const current = await catalog(true);
+      const current = await tx.catalog();
       const selected = current.filter((p) => input.ids.includes(p.id));
       if (selected.length !== new Set(input.ids).size) return reply({ error: 'One or more selected products were not found.' }, 404);
       const selectedGroups = new Set(selected.map((p) => p.listingGroup || p.id));
@@ -415,16 +464,11 @@ export async function POST(req: Request) {
       for (const product of groupProducts) {
         const linked = { ...product, listingGroup: group };
         statements.push(
-          sql(
-            'INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status=excluded.status',
-            linked.id,
-            JSON.stringify(linked),
-            linked.status
-          )
+          tx.product(linked)
         );
       }
       statements.push(await audit(u, 'content.product_variants_linked', group, 'Product colour variants linked', { ids: groupProducts.map((p) => p.id) }));
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true, listingGroup: group, ids: groupProducts.map((p) => p.id) });
     }
 
@@ -453,7 +497,7 @@ export async function POST(req: Request) {
           note: z.string().max(500).optional(),
         })
         .parse(data);
-      const ids = Array.isArray(input.id) ? input.id : [input.id];
+      const ids = [...new Set(Array.isArray(input.id) ? input.id : [input.id])];
       const inFulfillmentStages = [
         'Picklist', 'Picking', 'Pack & AirwayBill', 'Packing', 'Packed', 'AWB Pending',
         'Ready to Ship', 'Shipped', 'Dispatched', 'In Transit', 'Out for Delivery', 'Delivered',
@@ -461,16 +505,11 @@ export async function POST(req: Request) {
         'Return Requested', 'Returned', 'Exchange Requested', 'Exchange Processing', 'Refund Pending', 'Refunded',
       ];
       const statements = [...actorGuard(u)];
-      const currentProducts = await catalog(true);
+      const currentProducts = await tx.catalog();
       const nowIso = new Date().toISOString();
 
       for (const orderId of ids) {
-        const existing = await sql('SELECT id, details, items, status FROM orders WHERE id=?', orderId).first<{
-          id: string;
-          details: string;
-          items: string;
-          status: string;
-        }>();
+        const existing = await tx.order(orderId);
         if (existing) {
           const details = JSON.parse(existing.details || '{}');
           const inFulfillment = inFulfillmentStages.includes(existing.status);
@@ -489,44 +528,13 @@ export async function POST(req: Request) {
             const items = JSON.parse(existing.items || '[]');
             for (const item of items) {
               const prod = currentProducts.find((x) => x.id === item.id);
-              if (prod) {
-                const hasInternalVariants = Array.isArray(prod.variants) && prod.variants.length > 0;
-                const matchedVariant = hasInternalVariants
-                  ? prod.variants!.find((v) =>
-                      item.variantId
-                        ? v.id === item.variantId
-                        : (v.size || 'Standard') === item.size && (!item.color || (v.color || '').toLowerCase() === item.color.toLowerCase())
-                    ) || prod.variants!.find((v) => (v.size || 'Standard') === item.size)
-                  : null;
+              if (!prod) return reply({ error: 'An inventory product is missing. Review the order before restocking.' }, 409);
+          if (prod) {
+                const { prevStock, newStock, matchedVariant } = restoreStock(prod, item, Number(item.qty || 0));
 
-                const sizeStock = prod.sizeStock as Record<string, number> | undefined;
-                const hasSizeStock = Boolean(sizeStock && Object.keys(sizeStock).length > 0);
-                let prevStock = 0;
-                let newStock = 0;
-
-                if (matchedVariant) {
-                  prevStock = Number(matchedVariant.stock || 0);
-                  newStock = prevStock + Number(item.qty || 0);
-                  matchedVariant.stock = newStock;
-                  prod.stock = prod.variants!.reduce((acc, v) => acc + Number(v.stock || 0), 0);
-                } else if (hasSizeStock && item.size) {
-                  prevStock = Number(sizeStock![item.size] || 0);
-                  newStock = prevStock + Number(item.qty || 0);
-                  sizeStock![item.size] = newStock;
-                  prod.stock = Object.values(sizeStock!).reduce((acc, v) => acc + Number(v || 0), 0);
-                } else {
-                  prevStock = Number(prod.stock || 0);
-                  newStock = prevStock + Number(item.qty || 0);
-                  prod.stock = newStock;
-                }
 
                 statements.push(
-                  sql(
-                    'INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status=excluded.status',
-                    prod.id,
-                    JSON.stringify(prod),
-                    prod.status || 'Active'
-                  )
+                  tx.product(prod)
                 );
 
                 statements.push(
@@ -564,7 +572,7 @@ export async function POST(req: Request) {
           );
         }
       }
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true, deleted: ids.length });
     }
 
@@ -579,66 +587,36 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const existing = await sql('SELECT id, details, items, status FROM orders WHERE id=?', input.orderId).first<{
-        id: string;
-        details: string;
-        items: string;
-        status: string;
-      }>();
+      const existing = await tx.order(input.orderId);
       if (!existing) return reply({ error: 'Order not found.' }, 404);
 
       const details = JSON.parse(existing.details || '{}');
       if (details.returnRestocked) {
         return reply({ error: 'This returned order has already been restocked.' }, 400);
       }
+      if (details.inventoryRestored || !['Returned', 'RTO', 'Returned to Origin'].includes(existing.status)) return reply({ error: 'Only a returned order whose inventory has not been restored can be restocked.' }, 409);
+      if ((await tx.returns()).some(ret => ret.orderId === input.orderId)) return reply({ error: 'Use the linked return request to restock this order.' }, 409);
 
       const items: any[] = JSON.parse(existing.items || '[]');
-      const currentProducts = await catalog(true);
+      const currentProducts = await tx.catalog();
       const statements = [...actorGuard(u)];
       const nowIso = new Date().toISOString();
+      const restockedIndexes = new Set<number>(details.returnRestockedIndexes || []);
+      if (input.itemIndexes?.some(index => index >= items.length) || input.itemIndexes?.length === 0) return reply({ error: 'Select valid order items to restock.' }, 400);
 
       for (let idx = 0; idx < items.length; idx++) {
         if (input.itemIndexes && !input.itemIndexes.includes(idx)) continue;
+        if (restockedIndexes.has(idx)) continue;
         const item = items[idx];
         const prod = currentProducts.find((x) => x.id === item.id);
-        if (prod) {
-          const hasInternalVariants = Array.isArray(prod.variants) && prod.variants.length > 0;
-          const matchedVariant = hasInternalVariants
-            ? prod.variants!.find((v) =>
-                item.variantId
-                  ? v.id === item.variantId
-                  : (v.size || 'Standard') === item.size && (!item.color || (v.color || '').toLowerCase() === item.color.toLowerCase())
-              ) || prod.variants!.find((v) => (v.size || 'Standard') === item.size)
-            : null;
+        if (!prod) return reply({ error: 'An inventory product is missing. Review the order before restocking.' }, 409);
+          if (prod) {
+          const { prevStock, newStock, matchedVariant } = restoreStock(prod, item, Number(item.qty || 0));
+          restockedIndexes.add(idx);
 
-          const sizeStock = prod.sizeStock as Record<string, number> | undefined;
-          const hasSizeStock = Boolean(sizeStock && Object.keys(sizeStock).length > 0);
-          let prevStock = 0;
-          let newStock = 0;
-
-          if (matchedVariant) {
-            prevStock = Number(matchedVariant.stock || 0);
-            newStock = prevStock + Number(item.qty || 0);
-            matchedVariant.stock = newStock;
-            prod.stock = prod.variants!.reduce((acc, v) => acc + Number(v.stock || 0), 0);
-          } else if (hasSizeStock && item.size) {
-            prevStock = Number(sizeStock![item.size] || 0);
-            newStock = prevStock + Number(item.qty || 0);
-            sizeStock![item.size] = newStock;
-            prod.stock = Object.values(sizeStock!).reduce((acc, v) => acc + Number(v || 0), 0);
-          } else {
-            prevStock = Number(prod.stock || 0);
-            newStock = prevStock + Number(item.qty || 0);
-            prod.stock = newStock;
-          }
 
           statements.push(
-            sql(
-              'INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status=excluded.status',
-              prod.id,
-              JSON.stringify(prod),
-              prod.status || 'Active'
-            )
+            tx.product(prod)
           );
 
           statements.push(
@@ -661,7 +639,8 @@ export async function POST(req: Request) {
         }
       }
 
-      details.returnRestocked = true;
+      details.returnRestockedIndexes = [...restockedIndexes];
+      details.returnRestocked = restockedIndexes.size === items.length;
       details.returnRestockedAt = nowIso;
       details.returnRestockedBy = { id: u.id, name: u.name };
       if (input.note) details.returnRestockNote = input.note;
@@ -675,14 +654,14 @@ export async function POST(req: Request) {
         })
       );
 
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true, details });
     }
 
     // 7. Inventory Logs Query
     if (data.action === 'inventory-logs') {
-      const productId = data.productId ? String(data.productId) : undefined;
-      const logs = await getInventoryLogs(productId, 150);
+      const input = z.object({ productId: z.string().max(100).optional(), variantId: z.string().max(100).optional() }).parse(data);
+      const logs = await getInventoryLogs(input.productId, 150, input.variantId);
       return reply({ ok: true, logs });
     }
 
@@ -702,13 +681,7 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const existing = await sql('SELECT id, details, items, total, status FROM orders WHERE id=?', input.orderId).first<{
-        id: string;
-        details: string;
-        items: string;
-        total: number;
-        status: string;
-      }>();
+      const existing = await tx.order(input.orderId);
       if (!existing) return reply({ error: 'Order not found.' }, 404);
 
       const details = JSON.parse(existing.details || '{}');
@@ -774,7 +747,7 @@ export async function POST(req: Request) {
           }
         )
       );
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true, details, status: nextStatus });
     }
 
@@ -805,16 +778,14 @@ export async function POST(req: Request) {
 
       const statements = [...actorGuard(u)];
       let matchedTotal = 0;
+      if (new Set(input.orderSettlements.map(item => item.orderId)).size !== input.orderSettlements.length) return reply({ error: 'Each order can only appear once in a remittance.' }, 400);
       for (const item of input.orderSettlements) {
-        const existing = await sql('SELECT id, details, total, status FROM orders WHERE id=?', item.orderId).first<{
-          id: string;
-          details: string;
-          total: number;
-          status: string;
-        }>();
+        const existing = await tx.order(item.orderId);
+        if (!existing) return reply({ error: `Order ${item.orderId} was not found. No settlements were saved.` }, 404);
         if (existing) {
           const details = JSON.parse(existing.details || '{}');
           const history: any[] = Array.isArray(details.codSettlementHistory) ? details.codSettlementHistory : [];
+          if (history.some(entry => entry.remittanceId === input.remittanceId)) return reply({ error: 'This remittance has already been recorded for a selected order.' }, 409);
           const txId = `SET-REM-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           history.push({
             id: txId,
@@ -854,6 +825,7 @@ export async function POST(req: Request) {
           matchedTotal += item.amount;
         }
       }
+      if (input.receivedAmount !== Math.max(0, matchedTotal - input.courierCharges + input.adjustments)) return reply({ error: 'Received amount must match the selected settlements, courier charges and adjustments.' }, 400);
       statements.push(
         await audit(
           u,
@@ -873,7 +845,7 @@ export async function POST(req: Request) {
           }
         )
       );
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true, matchedCount: input.orderSettlements.length, matchedTotal });
     }
 
@@ -888,18 +860,14 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const existing = await sql('SELECT id, details, total, status FROM orders WHERE id=?', input.orderId).first<{
-        id: string;
-        details: string;
-        total: number;
-        status: string;
-      }>();
+      const existing = await tx.order(input.orderId);
       if (!existing) return reply({ error: 'Order not found.' }, 404);
 
       const details = JSON.parse(existing.details || '{}');
       const history: any[] = Array.isArray(details.codSettlementHistory) ? details.codSettlementHistory : [];
       const targetTx = history.find((x) => x.id === input.transactionId);
       if (!targetTx) return reply({ error: 'Transaction not found.' }, 404);
+      if (targetTx.type === 'reversal' || history.some(entry => entry.reversalOfId === input.transactionId)) return reply({ error: 'This payment has already been reversed or is not a payment.' }, 409);
 
       const revTxId = `REV-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       history.push({
@@ -931,6 +899,7 @@ export async function POST(req: Request) {
       details.codRemainingAmount = remaining;
       details.codStatus = isSettled ? 'Settled' : isPartial ? 'Partially Settled' : 'Pending';
       details.codSettled = isSettled;
+      details.codCollected = netReceived > 0;
       if (!isSettled) {
         details.codSettledAt = undefined;
       }
@@ -955,7 +924,7 @@ export async function POST(req: Request) {
           }
         )
       );
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true, details, status: nextStatus });
     }
 
@@ -978,12 +947,7 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const existing = await sql('SELECT id, details, total, status FROM orders WHERE id=?', input.orderId).first<{
-        id: string;
-        details: string;
-        total: number;
-        status: string;
-      }>();
+      const existing = await tx.order(input.orderId);
       if (!existing) return reply({ error: 'Order not found.' }, 404);
 
       const details = JSON.parse(existing.details || '{}');
@@ -1014,7 +978,7 @@ export async function POST(req: Request) {
           }
         )
       );
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true, details });
     }
 
@@ -1070,12 +1034,7 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const existing = await sql('SELECT id, details, items, status FROM orders WHERE id=?', p.id).first<{
-        id: string;
-        details: string;
-        items: string;
-        status: string;
-      }>();
+      const existing = await tx.order(p.id);
       if (!existing) return reply({ error: 'Order not found.' }, 404);
 
       const statements = [...actorGuard(u)];
@@ -1088,57 +1047,40 @@ export async function POST(req: Request) {
       if (p.csrAgent !== undefined) details.csrAgent = p.csrAgent;
       if (p.csrHistory !== undefined) details.csrHistory = p.csrHistory;
       if (p.details) {
-        Object.assign(details, p.details);
+        const editable = z.object({
+          name: z.string().trim().min(2).max(80).optional(),
+          phone: z.string().regex(/^(03\d{9}|\+923\d{9})$/).optional(),
+          alternatePhone: z.string().max(25).optional(),
+          address: z.string().trim().min(4).max(250).optional(),
+          city: z.string().trim().min(2).max(60).optional(),
+          province: z.string().max(80).optional(),
+          landmark: z.string().max(120).optional(),
+          courier: z.string().max(100).optional(),
+          trackingNumber: z.string().max(100).optional(),
+          note: z.string().max(500).optional(),
+        }).parse(p.details);
+        Object.assign(details, editable);
       }
 
       const nextStatus = p.status || existing.status;
+      if (existing.status === 'Cancelled' && nextStatus !== 'Cancelled') return reply({ error: 'A cancelled order cannot be reopened after stock restoration. Create a new order.' }, 409);
+      if (nextStatus === 'COD Settled' && !details.codSettled) return reply({ error: 'Record the COD settlement before marking this order settled.' }, 400);
       const nowIso = new Date().toISOString();
 
       // Only restore stock on explicit Cancellation (NOT on Returned without explicit restock confirmation)
       if (nextStatus === 'Cancelled' && existing.status !== 'Cancelled' && !details.inventoryRestored) {
         const items = JSON.parse(existing.items || '[]');
-        const currentProducts = await catalog(true);
+        const currentProducts = await tx.catalog();
 
         for (const item of items) {
           const prod = currentProducts.find((x) => x.id === item.id);
+          if (!prod) return reply({ error: 'An inventory product is missing. Review the order before restocking.' }, 409);
           if (prod) {
-            const hasInternalVariants = Array.isArray(prod.variants) && prod.variants.length > 0;
-            const matchedVariant = hasInternalVariants
-              ? prod.variants!.find((v) =>
-                  item.variantId
-                    ? v.id === item.variantId
-                    : (v.size || 'Standard') === item.size && (!item.color || (v.color || '').toLowerCase() === item.color.toLowerCase())
-                ) || prod.variants!.find((v) => (v.size || 'Standard') === item.size)
-              : null;
+            const { prevStock, newStock, matchedVariant } = restoreStock(prod, item, Number(item.qty || 0));
 
-            const sizeStock = prod.sizeStock as Record<string, number> | undefined;
-            const hasSizeStock = Boolean(sizeStock && Object.keys(sizeStock).length > 0);
-            let prevStock = 0;
-            let newStock = 0;
-
-            if (matchedVariant) {
-              prevStock = Number(matchedVariant.stock || 0);
-              newStock = prevStock + Number(item.qty || 0);
-              matchedVariant.stock = newStock;
-              prod.stock = prod.variants!.reduce((acc, v) => acc + Number(v.stock || 0), 0);
-            } else if (hasSizeStock && item.size) {
-              prevStock = Number(sizeStock![item.size] || 0);
-              newStock = prevStock + Number(item.qty || 0);
-              sizeStock![item.size] = newStock;
-              prod.stock = Object.values(sizeStock!).reduce((acc, v) => acc + Number(v || 0), 0);
-            } else {
-              prevStock = Number(prod.stock || 0);
-              newStock = prevStock + Number(item.qty || 0);
-              prod.stock = newStock;
-            }
 
             statements.push(
-              sql(
-                'INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status=excluded.status',
-                prod.id,
-                JSON.stringify(prod),
-                prod.status || 'Active'
-              )
+              tx.product(prod)
             );
 
             statements.push(
@@ -1173,7 +1115,7 @@ export async function POST(req: Request) {
           role: u.role,
         })
       );
-      await database().batch(statements);
+      await tx.commit(statements);
       return reply({ ok: true });
     }
 
@@ -1209,14 +1151,7 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const existingOrder = await sql('SELECT id, details, items, status, total, created_at FROM orders WHERE id=?', input.orderId).first<{
-        id: string;
-        details: string;
-        items: string;
-        status: string;
-        total: number;
-        created_at: string;
-      }>();
+      const existingOrder = await tx.order(input.orderId);
       if (!existingOrder) return reply({ error: 'Order not found.' }, 404);
 
       if (existingOrder.status === 'Cancelled') {
@@ -1232,20 +1167,25 @@ export async function POST(req: Request) {
       const orderDetails: any = JSON.parse(existingOrder.details || '{}');
 
       // Fetch all existing returns for this order to verify return quantities
-      const existingReturns = (await getReturnRequests()).filter((r) => r.orderId === input.orderId && r.returnStatus !== 'Cancelled' && r.returnStatus !== 'Rejected');
+      const existingReturns = (await tx.returns()).filter((r) => r.orderId === input.orderId && r.returnStatus !== 'Cancelled' && r.returnStatus !== 'Rejected');
 
       // Validate quantities for each item being returned
       const validatedItems: ReturnItem[] = [];
       let totalRefundable = 0;
+      const requestedKeys = new Set<string>();
 
       for (const reqItem of input.items) {
-        const originalOrderItem = orderItems.find(
-          (o) => o.id === reqItem.id && (!reqItem.size || (o.size || 'Standard') === (reqItem.size || 'Standard')) && (!reqItem.color || (o.color || '').toLowerCase() === (reqItem.color || '').toLowerCase())
-        ) || orderItems.find((o) => o.id === reqItem.id);
+        const matches = orderItems.filter(o => o.id === reqItem.id && (reqItem.variantId
+          ? o.variantId === reqItem.variantId
+          : (o.size || 'Standard') === (reqItem.size || 'Standard') && (o.color || '').toLowerCase() === (reqItem.color || '').toLowerCase()));
+        const originalOrderItem = matches.length === 1 ? matches[0] : null;
 
         if (!originalOrderItem) {
           return reply({ error: `Item "${reqItem.name}" was not found in Order #${input.orderId}.` }, 400);
         }
+        const key = JSON.stringify([originalOrderItem.id, originalOrderItem.variantId || '', originalOrderItem.size || 'Standard', (originalOrderItem.color || '').toLowerCase()]);
+        if (requestedKeys.has(key)) return reply({ error: 'Each order item may only appear once in a return request.' }, 400);
+        requestedKeys.add(key);
 
         const maxDeliveredQty = Number(originalOrderItem.qty || 1);
         
@@ -1253,7 +1193,7 @@ export async function POST(req: Request) {
         let alreadyReturnedQty = 0;
         for (const ret of existingReturns) {
           for (const it of ret.items) {
-            if (it.id === reqItem.id && (it.size || 'Standard') === (reqItem.size || 'Standard') && (it.color || '').toLowerCase() === (reqItem.color || '').toLowerCase()) {
+            if (it.id === originalOrderItem.id && (it.size || 'Standard') === (originalOrderItem.size || 'Standard') && (it.color || '').toLowerCase() === (originalOrderItem.color || '').toLowerCase()) {
               alreadyReturnedQty += Number(it.returnQty || 0);
             }
           }
@@ -1266,13 +1206,16 @@ export async function POST(req: Request) {
           }, 400);
         }
 
-        const itemTotal = Number(reqItem.unitPrice || 0) * Number(reqItem.returnQty || 1);
+        const unitPrice = originalOrderItem.totalPrice !== undefined
+          ? Number(originalOrderItem.totalPrice) / maxDeliveredQty
+          : Number(originalOrderItem.unitPrice ?? originalOrderItem.price ?? 0);
+        const itemTotal = Math.round(unitPrice * reqItem.returnQty);
         totalRefundable += itemTotal;
 
         validatedItems.push({
           id: reqItem.id,
-          variantId: reqItem.variantId,
-          name: reqItem.name,
+          variantId: originalOrderItem.variantId,
+          name: originalOrderItem.name || reqItem.name,
           sku: reqItem.sku || originalOrderItem.sku || reqItem.id,
           color: reqItem.color || originalOrderItem.color,
           colorHex: reqItem.colorHex,
@@ -1280,13 +1223,14 @@ export async function POST(req: Request) {
           image: reqItem.image || originalOrderItem.image,
           orderedQty: maxDeliveredQty,
           returnQty: reqItem.returnQty,
-          unitPrice: reqItem.unitPrice,
+          unitPrice,
           totalPrice: itemTotal,
           restocked: false,
         });
       }
+      if (totalRefundable + existingReturns.reduce((sum, ret) => sum + ret.totalRefundableAmount, 0) > existingOrder.total) return reply({ error: 'Cumulative returns cannot exceed the amount paid for this order.' }, 400);
 
-      const returnId = `RET-${input.orderId.replace('ZPK-', '')}-${Date.now().toString().slice(-4)}`;
+      const returnId = `RET-${crypto.randomUUID()}`;
       const nowIso = new Date().toISOString();
 
       const initialTimeline: ReturnTimelineEntry[] = [
@@ -1332,14 +1276,14 @@ export async function POST(req: Request) {
         updatedAt: nowIso,
       };
 
-      await saveReturnRequest(newReturn);
+      const statements = [tx.return(newReturn)];
 
       // Update order details to reflect return status
       orderDetails.returnStatus = 'Requested';
       orderDetails.returnId = returnId;
-      await sql('UPDATE orders SET details=? WHERE id=?', JSON.stringify(orderDetails), input.orderId).run();
+      statements.push(sql('UPDATE orders SET details=? WHERE id=?', JSON.stringify(orderDetails), input.orderId));
 
-      await sql(
+      statements.push(sql(
         'INSERT INTO access_audit (id,actor_id,target_id,action,reason,metadata,ip,device,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
         crypto.randomUUID(),
         u.id,
@@ -1350,7 +1294,8 @@ export async function POST(req: Request) {
         null,
         null,
         Date.now()
-      ).run();
+      ));
+      await tx.commit(statements);
 
       return reply({ ok: true, returnRequest: newReturn });
     }
@@ -1369,7 +1314,7 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const allReturns = await getReturnRequests();
+      const allReturns = await tx.returns();
       const targetReturn = allReturns.find((r) => r.id === input.returnId);
       if (!targetReturn) return reply({ error: 'Return request not found.' }, 404);
 
@@ -1379,6 +1324,8 @@ export async function POST(req: Request) {
 
       const nowIso = new Date().toISOString();
       const previousStatus = targetReturn.returnStatus;
+      if (targetReturn.refundStatus === 'Refunded' && input.status !== 'Refunded') return reply({ error: 'A refunded return cannot be reopened or cancelled.' }, 409);
+      if (input.status === 'Refunded' && targetReturn.refundStatus !== 'Refunded') return reply({ error: 'Use Process refund to record the amount and payment reference.' }, 400);
       targetReturn.returnStatus = input.status;
       targetReturn.updatedAt = nowIso;
 
@@ -1418,17 +1365,17 @@ export async function POST(req: Request) {
         timestamp: nowIso,
       });
 
-      await saveReturnRequest(targetReturn);
+      const statements = [tx.return(targetReturn)];
 
       // Also update linked order status
-      const orderRow = await sql('SELECT id, details FROM orders WHERE id=?', targetReturn.orderId).first<{ id: string; details: string }>();
+      const orderRow = await tx.order(targetReturn.orderId);
       if (orderRow) {
         const orderDetails = JSON.parse(orderRow.details || '{}');
         orderDetails.returnStatus = input.status;
-        await sql('UPDATE orders SET details=? WHERE id=?', JSON.stringify(orderDetails), targetReturn.orderId).run();
+        statements.push(sql('UPDATE orders SET details=? WHERE id=?', JSON.stringify(orderDetails), targetReturn.orderId));
       }
 
-      await sql(
+      statements.push(sql(
         'INSERT INTO access_audit (id,actor_id,target_id,action,reason,metadata,ip,device,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
         crypto.randomUUID(),
         u.id,
@@ -1439,7 +1386,8 @@ export async function POST(req: Request) {
         null,
         null,
         Date.now()
-      ).run();
+      ));
+      await tx.commit(statements);
 
       return reply({ ok: true, returnRequest: targetReturn });
     }
@@ -1455,7 +1403,7 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const allReturns = await getReturnRequests();
+      const allReturns = await tx.returns();
       const targetReturn = allReturns.find((r) => r.id === input.returnId);
       if (!targetReturn) return reply({ error: 'Return request not found.' }, 404);
 
@@ -1476,9 +1424,9 @@ export async function POST(req: Request) {
         timestamp: nowIso,
       });
 
-      await saveReturnRequest(targetReturn);
+      const statements = [tx.return(targetReturn)];
 
-      await sql(
+      statements.push(sql(
         'INSERT INTO access_audit (id,actor_id,target_id,action,reason,metadata,ip,device,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
         crypto.randomUUID(),
         u.id,
@@ -1489,7 +1437,8 @@ export async function POST(req: Request) {
         null,
         null,
         Date.now()
-      ).run();
+      ));
+      await tx.commit(statements);
 
       return reply({ ok: true, returnRequest: targetReturn });
     }
@@ -1506,13 +1455,14 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const allReturns = await getReturnRequests();
+      const allReturns = await tx.returns();
       const targetReturn = allReturns.find((r) => r.id === input.returnId);
       if (!targetReturn) return reply({ error: 'Return request not found.' }, 404);
 
       const nowIso = new Date().toISOString();
 
       if (input.restockAction === 'do_not_restock') {
+        if (targetReturn.items.some(item => item.restocked)) return reply({ error: 'Already-restocked inventory cannot be marked as not restocked.' }, 409);
         targetReturn.inventoryAction = 'Do Not Restock';
         targetReturn.updatedAt = nowIso;
         targetReturn.timeline.push({
@@ -1524,11 +1474,14 @@ export async function POST(req: Request) {
           actorRole: u.role,
           timestamp: nowIso,
         });
-        await saveReturnRequest(targetReturn);
+        await tx.commit([tx.return(targetReturn), await audit(u, 'return.inventory_skipped', targetReturn.id, input.note || 'Marked as do not restock')]);
         return reply({ ok: true, returnRequest: targetReturn });
       }
 
-      const currentProducts = await catalog(true);
+      if (['Rejected', 'Cancelled'].includes(targetReturn.returnStatus) || targetReturn.inspectionStatus === 'Pending Inspection') return reply({ error: 'Inspect and approve the returned items before restocking.' }, 409);
+      if (input.itemIndexes?.some(index => index >= targetReturn.items.length) || input.itemIndexes?.length === 0) return reply({ error: 'Select valid return items to restock.' }, 400);
+
+      const currentProducts = await tx.catalog();
       const statements: any[] = [...actorGuard(u)];
       let restockedAny = false;
       const restockedItemDetails: string[] = [];
@@ -1539,44 +1492,13 @@ export async function POST(req: Request) {
         if (it.restocked) continue; // Skip already restocked items
 
         const prod = currentProducts.find((x) => x.id === it.id);
-        if (prod) {
-          const hasInternalVariants = Array.isArray(prod.variants) && prod.variants.length > 0;
-          const matchedVariant = hasInternalVariants
-            ? prod.variants!.find((v) =>
-                it.variantId
-                  ? v.id === it.variantId
-                  : (v.size || 'Standard') === (it.size || 'Standard') && (!it.color || (v.color || '').toLowerCase() === (it.color || '').toLowerCase())
-              ) || prod.variants!.find((v) => (v.size || 'Standard') === (it.size || 'Standard'))
-            : null;
+        if (!prod) return reply({ error: 'An inventory product is missing. Review the order before restocking.' }, 409);
+          if (prod) {
+          const { prevStock, newStock, matchedVariant } = restoreStock(prod, it, Number(it.returnQty || 0));
 
-          const sizeStock = prod.sizeStock as Record<string, number> | undefined;
-          const hasSizeStock = Boolean(sizeStock && Object.keys(sizeStock).length > 0);
-          let prevStock = 0;
-          let newStock = 0;
-
-          if (matchedVariant) {
-            prevStock = Number(matchedVariant.stock || 0);
-            newStock = prevStock + Number(it.returnQty || 0);
-            matchedVariant.stock = newStock;
-            prod.stock = prod.variants!.reduce((acc, v) => acc + Number(v.stock || 0), 0);
-          } else if (hasSizeStock && it.size) {
-            prevStock = Number(sizeStock![it.size] || 0);
-            newStock = prevStock + Number(it.returnQty || 0);
-            sizeStock![it.size] = newStock;
-            prod.stock = Object.values(sizeStock!).reduce((acc, v) => acc + Number(v || 0), 0);
-          } else {
-            prevStock = Number(prod.stock || 0);
-            newStock = prevStock + Number(it.returnQty || 0);
-            prod.stock = newStock;
-          }
 
           statements.push(
-            sql(
-              'INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status=excluded.status',
-              prod.id,
-              JSON.stringify(prod),
-              prod.status || 'Active'
-            )
+            tx.product(prod)
           );
 
           statements.push(
@@ -1609,7 +1531,7 @@ export async function POST(req: Request) {
         return reply({ error: 'All selected items have already been restocked into inventory.' }, 400);
       }
 
-      targetReturn.inventoryAction = 'Restocked';
+      targetReturn.inventoryAction = targetReturn.items.every(item => item.restocked) ? 'Restocked' : 'Pending';
       targetReturn.updatedAt = nowIso;
       targetReturn.timeline.push({
         id: `tl-${Date.now()}`,
@@ -1621,8 +1543,8 @@ export async function POST(req: Request) {
         timestamp: nowIso,
       });
 
-      await database().batch(statements);
-      await saveReturnRequest(targetReturn);
+      statements.push(tx.return(targetReturn), await audit(u, 'return.restocked', targetReturn.id, 'Inspected return items restocked'));
+      await tx.commit(statements);
 
       return reply({ ok: true, returnRequest: targetReturn });
     }
@@ -1643,13 +1565,14 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const allReturns = await getReturnRequests();
+      const allReturns = await tx.returns();
       const targetReturn = allReturns.find((r) => r.id === input.returnId);
       if (!targetReturn) return reply({ error: 'Return request not found.' }, 404);
 
       if (targetReturn.refundStatus === 'Refunded') {
         return reply({ error: 'This return request has already been refunded.' }, 400);
       }
+      if (['Requested', 'Rejected', 'Cancelled'].includes(targetReturn.returnStatus)) return reply({ error: 'Approve this return before processing a refund.' }, 409);
 
       if (input.refundAmount > targetReturn.totalRefundableAmount) {
         return reply({ error: `Refund amount (Rs. ${input.refundAmount}) cannot exceed total refundable amount (Rs. ${targetReturn.totalRefundableAmount}).` }, 400);
@@ -1678,10 +1601,10 @@ export async function POST(req: Request) {
         timestamp: nowIso,
       });
 
-      await saveReturnRequest(targetReturn);
+      const statements = [tx.return(targetReturn)];
 
       // Update linked order's refund status
-      const orderRow = await sql('SELECT id, details FROM orders WHERE id=?', targetReturn.orderId).first<{ id: string; details: string }>();
+      const orderRow = await tx.order(targetReturn.orderId);
       if (orderRow) {
         const orderDetails = JSON.parse(orderRow.details || '{}');
         orderDetails.refundStatus = 'Refunded';
@@ -1689,10 +1612,10 @@ export async function POST(req: Request) {
         orderDetails.refundMethod = input.refundMethod;
         orderDetails.refundReference = input.refundReference;
         orderDetails.refundedAt = nowIso;
-        await sql('UPDATE orders SET details=? WHERE id=?', JSON.stringify(orderDetails), targetReturn.orderId).run();
+        statements.push(sql('UPDATE orders SET details=? WHERE id=?', JSON.stringify(orderDetails), targetReturn.orderId));
       }
 
-      await sql(
+      statements.push(sql(
         'INSERT INTO access_audit (id,actor_id,target_id,action,reason,metadata,ip,device,created_at) VALUES (?,?,?,?,?,?,?,?,?)',
         crypto.randomUUID(),
         u.id,
@@ -1703,7 +1626,8 @@ export async function POST(req: Request) {
         null,
         null,
         Date.now()
-      ).run();
+      ));
+      await tx.commit(statements);
 
       return reply({ ok: true, returnRequest: targetReturn });
     }
@@ -1718,7 +1642,7 @@ export async function POST(req: Request) {
         })
         .parse(data);
 
-      const allReturns = await getReturnRequests();
+      const allReturns = await tx.returns();
       const targetReturn = allReturns.find((r) => r.id === input.returnId);
       if (!targetReturn) return reply({ error: 'Return request not found.' }, 404);
 
@@ -1736,7 +1660,7 @@ export async function POST(req: Request) {
         timestamp: nowIso,
       });
 
-      await saveReturnRequest(targetReturn);
+      await tx.commit([tx.return(targetReturn), await audit(u, 'return.note_added', targetReturn.id, input.note)]);
       return reply({ ok: true, returnRequest: targetReturn });
     }
 

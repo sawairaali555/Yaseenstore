@@ -1,3 +1,4 @@
+import { downloadCsv } from './csv-export';
 import { money } from "@/app/catalog";
 import { cleanPakistanPhone, isValidPakistanPhone } from "@/lib/pakistan-locations";
 import type { ManagedProduct } from "@/lib/store-data";
@@ -366,10 +367,10 @@ export function getNextOrderAction(order: LifecycleOrder, userRole: string = "ad
   if (["Pack & AirwayBill", "Packing", "Processing", "Ready for Packing"].includes(status)) {
     if (!hasTracking) {
       return {
-        label: "Generate Airway Bill",
+        label: "Assign courier tracking",
         actionType: "generate_awb",
         variant: "primary",
-        description: "Book courier consignment and print official shipping label",
+        description: "Record the courier-issued consignment number",
         roleRequired: ["admin", "super_admin", "warehouse", "shipping"],
       };
     }
@@ -784,15 +785,15 @@ export function exportOrdersToCSV(orders: LifecycleOrder[]): void {
       o.created_at ? new Date(o.created_at).toLocaleString("en-PK") : "",
       o.status,
       o.details.csrStatus || "Pending",
-      `"${(o.details.name || "").replace(/"/g, '""')}"`,
+      (o.details.name || ""),
       o.details.phone || "",
       o.details.alternatePhone || "",
-      `"${(o.details.address || "").replace(/"/g, '""')}"`,
+      (o.details.address || ""),
       o.details.city || "",
       o.details.province || "",
-      `"${(o.details.landmark || "").replace(/"/g, '""')}"`,
+      (o.details.landmark || ""),
       o.items.reduce((s, i) => s + (i.qty || 1), 0),
-      `"${itemsSummary.replace(/"/g, '""')}"`,
+      itemsSummary,
       o.details.subtotal || o.total,
       o.details.deliveryCharge || 0,
       o.details.discount || 0,
@@ -801,18 +802,11 @@ export function exportOrdersToCSV(orders: LifecycleOrder[]): void {
       o.details.trackingNumber || "",
       o.details.source || "Website",
       o.details.csrAgent || "",
-      `"${(o.details.note || o.details.csrNotes || "").replace(/"/g, '""')}"`,
-    ].join(",");
+      (o.details.note || o.details.csrNotes || ""),
+    ];
   });
 
-  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  link.setAttribute("download", `orders_export_${new Date().toISOString().slice(0, 10)}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  downloadCsv(headers, rows, `orders_export_${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 /**
@@ -973,30 +967,21 @@ export function exportCodSettlementsToCSV(orders: LifecycleOrder[]): void {
     const breakdown = calculateCodBreakdown(o);
     const lastTx = breakdown.transactions[breakdown.transactions.length - 1];
     return [
-      `"${o.id}"`,
-      `"${(o.details?.name || "").replace(/"/g, '""')}"`,
-      `"${o.details?.phone || ""}"`,
-      `"${o.details?.city || ""}"`,
-      `"${o.details?.courier || "Trax"}"`,
-      `"${o.details?.trackingNumber || ""}"`,
-      `"${o.details?.deliveredAt || o.created_at || ""}"`,
+      o.id,
+      (o.details?.name || ""),
+      o.details?.phone || "",
+      o.details?.city || "",
+      o.details?.courier || "Trax",
+      o.details?.trackingNumber || "",
+      o.details?.deliveredAt || o.created_at || "",
       breakdown.expectedAmount,
       breakdown.receivedAmount,
       breakdown.remainingAmount,
-      `"${breakdown.status}"`,
-      `"${(breakdown.disputeReason || "").replace(/"/g, '""')}"`,
-      `"${(lastTx?.reference || "").replace(/"/g, '""')}"`,
-    ].join(",");
+      breakdown.status,
+      (breakdown.disputeReason || ""),
+      (lastTx?.reference || ""),
+    ];
   });
 
-  const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  link.setAttribute("download", `cod_settlements_${new Date().toISOString().slice(0, 10)}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  downloadCsv(headers, rows, `cod_settlements_${new Date().toISOString().slice(0, 10)}.csv`);
 }
-
-

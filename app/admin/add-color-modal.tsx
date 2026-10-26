@@ -1,4 +1,5 @@
 "use client";
+import { adminFetch } from "@/lib/admin-request";
 import { useState, useEffect, useRef } from "react";
 import {
   Check,
@@ -335,7 +336,7 @@ export default function AddColorModal({ product, open, busy = false, onOpenChang
       for (let i = 0; i < fileArray.length; i++) {
         const file = fileArray[i];
         setUploadProgress(`Uploading ${i + 1} of ${fileArray.length}…`);
-        const response = await fetch("/api/media", {
+        const response = await adminFetch("/api/media", {
           method: "POST",
           headers: { "Content-Type": file.type },
           body: file,
@@ -378,7 +379,7 @@ export default function AddColorModal({ product, open, busy = false, onOpenChang
     const targetIdx = replaceTargetIdx;
 
     try {
-      const response = await fetch("/api/media", {
+      const response = await adminFetch("/api/media", {
         method: "POST",
         headers: { "Content-Type": file.type },
         body: file,

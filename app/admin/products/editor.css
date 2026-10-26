@@ -100,8 +100,9 @@
 }
 
 .editor-card-header {
-  padding: 16px 20px;
+  padding: 18px 22px;
   border-bottom: 1px solid #f1f5f9;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -109,9 +110,9 @@
 }
 
 .editor-card-header h2 {
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
+  font-size: 17px;
+  font-weight: 850;
+  color: #1f2a44;
   margin: 0;
   display: flex;
   align-items: center;
@@ -119,9 +120,9 @@
 }
 
 .editor-card-header small {
-  font-size: 12px;
-  color: #64748b;
-  font-weight: normal;
+  font-size: 13px;
+  color: #5f6f86;
+  font-weight: 650;
 }
 
 .editor-card-body {
@@ -140,8 +141,8 @@
 
 .editor-field label {
   font-size: 13px;
-  font-weight: 600;
-  color: #334155;
+  font-weight: 750;
+  color: #33425a;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -158,9 +159,10 @@
 .editor-field select,
 .editor-field textarea {
   width: 100%;
-  padding: 9px 12px;
-  font-size: 13px;
-  color: #0f172a;
+  min-height: 40px;
+  padding: 10px 12px;
+  font-size: 14px;
+  color: #1f2a44;
   background: #ffffff;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -211,11 +213,11 @@
 /* Rich description toolbar */
 .editor-textarea-wrap,
 .editor-richtext-wrap {
-  border: 1px solid #d5deeb;
-  border-radius: 8px;
+  border: 1px solid #ccd8e8;
+  border-radius: 12px;
   overflow: hidden;
   background: #ffffff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 8px 24px rgba(31, 42, 68, 0.05);
 }
 
 .editor-textarea-wrap textarea {
@@ -229,36 +231,38 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 9px 12px;
-  background: linear-gradient(#ffffff, #fbfdff);
-  border-bottom: 1px solid #dbe3ef;
-  font-size: 11px;
-  color: #536982;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border-bottom: 1px solid #dbe5f1;
+  font-size: 12px;
+  color: #4f6178;
 }
 
 .editor-toolbar-group {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding-right: 6px;
-  margin-right: 2px;
-  border-right: 1px solid #e4ebf3;
+  gap: 4px;
+  padding: 4px;
+  margin-right: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
 }
 
 .editor-toolbar-select {
-  width: 116px;
-  min-width: 116px;
-  height: 30px;
-  border: 1px solid #dbe3ef;
-  border-radius: 7px;
+  width: 126px;
+  min-width: 126px;
+  height: 34px;
+  border: 1px solid #cfd9e8;
+  border-radius: 9px;
   background:
     linear-gradient(45deg, transparent 50%, #607089 50%) right 11px center / 5px 5px no-repeat,
     linear-gradient(135deg, #607089 50%, transparent 50%) right 7px center / 5px 5px no-repeat,
     #ffffff;
-  color: #536982;
-  font-size: 12px;
-  font-weight: 600;
+  color: #2e3d55;
+  font-size: 12.5px;
+  font-weight: 750;
   outline: none;
   padding: 0 24px 0 10px;
   appearance: none;
@@ -268,21 +272,21 @@
 }
 
 .editor-toolbar-select:first-child {
-  width: 126px;
-  min-width: 126px;
-  max-width: 126px;
+  width: 132px;
+  min-width: 132px;
+  max-width: 132px;
 }
 
 .editor-toolbar-select:nth-child(2) {
-  width: 108px;
-  min-width: 108px;
-  max-width: 108px;
+  width: 112px;
+  min-width: 112px;
+  max-width: 112px;
 }
 
 .editor-toolbar-heading {
-  width: 118px;
-  min-width: 118px;
-  max-width: 118px;
+  width: 124px;
+  min-width: 124px;
+  max-width: 124px;
 }
 
 .editor-toolbar-select:hover {
@@ -296,16 +300,16 @@
 }
 
 .editor-toolbar-btn {
-  background: none;
+  background: #ffffff;
   border: 1px solid transparent;
   cursor: pointer;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 7px;
-  border-radius: 6px;
-  color: #536982;
-  font-size: 11.5px;
-  font-weight: 700;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: #41516a;
+  font-size: 12px;
+  font-weight: 800;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -314,9 +318,9 @@
 }
 
 .editor-toolbar-btn:hover {
-  background: #eef4fb;
-  border-color: #d7e1ee;
-  color: #203664;
+  background: #eef3ff;
+  border-color: #c9d8f2;
+  color: #5342d3;
 }
 
 .editor-toolbar-btn:focus-visible,
@@ -345,33 +349,34 @@
 .editor-richtext-url input {
   min-width: 0;
   flex: 1;
-  height: 26px;
+  height: 32px;
   border: 1px solid #cbd5e1;
-  border-radius: 5px;
-  padding: 0 8px;
-  font-size: 12px;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 13px;
   color: #334155;
 }
 
 .editor-richtext-url button {
-  height: 26px;
-  border-radius: 5px;
-  padding: 0 8px;
-  background: #edf2f7;
-  color: #334155;
-  font-size: 11px;
-  font-weight: 700;
+  height: 32px;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #eef3ff;
+  color: #5342d3;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .editor-richtext-surface {
   min-height: 290px;
   max-height: 540px;
   overflow: auto;
-  padding: 30px 32px 18px;
+  padding: 30px 32px 22px;
   color: #1f2a44;
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.65;
   outline: none;
+  background: #ffffff;
 }
 
 .editor-richtext-surface:empty::before {
@@ -393,7 +398,7 @@
 
 .editor-richtext-surface p {
   margin: 0 0 12px;
-  color: #334155;
+  color: #243047;
 }
 
 .editor-richtext-surface ul,
@@ -432,14 +437,38 @@
 }
 
 @media (max-width: 700px) {
+  .editor-textarea-toolbar {
+    align-items: stretch;
+    gap: 7px;
+  }
+  .editor-toolbar-group {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+  }
   .editor-toolbar-select:first-child,
   .editor-toolbar-select:nth-child(2) {
     max-width: 100%;
     flex: 1 1 140px;
   }
+  .editor-toolbar-heading {
+    max-width: 100%;
+    flex: 1 1 160px;
+  }
+  .editor-toolbar-btn {
+    flex: 1 0 34px;
+  }
+  .editor-richtext-surface {
+    padding: 22px 20px;
+    font-size: 14px;
+  }
 }
 
 /* Pricing KPI Cards */
+.editor-variant-quantity { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+.editor-variant-quantity .editor-field { flex: 1 1 180px; max-width: 280px; }
+.editor-variant-quantity>small { flex-basis: 100%; color: #64748b; font-size: 12px; line-height: 1.5; }
+.editor-field input[readonly] { background: #f8fafc; color: #475569; }
+
 .pricing-kpis {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
@@ -862,6 +891,234 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.variants-matrix-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #dfe7f2;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.variants-matrix-grid {
+  display: grid;
+  min-width: max-content;
+}
+
+.variants-matrix-side {
+  grid-row: span 4;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 16px 10px;
+  border-right: 1px solid #dfe7f2;
+  background: #f8fafc;
+}
+
+.variants-matrix-brand {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  border-radius: 8px;
+  background: #9de1da;
+  color: #536982;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.variants-matrix-base-sku {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  border-radius: 7px;
+  background: #e9eef5;
+  color: #536982;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.variants-matrix-image {
+  width: 100%;
+  aspect-ratio: 1.08;
+  padding: 4px;
+  border: 1px solid #d2dbe8;
+  border-radius: 9px;
+  background: #fff;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.variants-matrix-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.variants-matrix-cost {
+  display: grid;
+  place-items: center;
+  min-height: 30px;
+  border-radius: 0 0 8px 8px;
+  background: #68707c;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.variant-matrix-head {
+  min-height: 108px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  padding: 14px 12px;
+  border-right: 1px solid #e4ebf3;
+  background: #edf2f8;
+  color: #536982;
+  text-align: center;
+  position: relative;
+}
+
+.variant-matrix-head.selected {
+  background: #e8f0ff;
+  box-shadow: inset 0 0 0 2px #9db8ff;
+}
+
+.variant-matrix-head > input[type="checkbox"] {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  accent-color: #6351f2;
+}
+
+.variant-matrix-thumb {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d7e0eb;
+  border-radius: 999px;
+  background: #fff;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.variant-matrix-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.variant-matrix-sku {
+  width: 100%;
+  max-width: 106px;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #536982;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 850;
+  outline: none;
+}
+
+.variant-matrix-sku:focus {
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: 0 0 0 2px #9db8ff;
+}
+
+.variant-matrix-head span {
+  color: #536982;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.variant-matrix-row-label {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-top: 1px solid #dfe7f2;
+  border-right: 1px solid #dfe7f2;
+  background: #fff;
+  color: #536982;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.variant-matrix-cell {
+  min-height: 66px;
+  display: grid;
+  place-items: center;
+  padding: 10px 12px;
+  border-top: 1px solid #dfe7f2;
+  border-right: 1px solid #eef2f7;
+  background: #fff;
+}
+
+.variant-matrix-stock {
+  width: 74px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: #f7fafc;
+  color: #536982;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 850;
+  outline: none;
+}
+
+.variant-matrix-stock:focus {
+  background: #fff;
+  box-shadow: 0 0 0 2px #8fb2e8;
+}
+
+.variant-matrix-select {
+  width: 100%;
+  min-width: 128px;
+  height: 40px;
+  border: 1px solid #d2dce9;
+  border-radius: 8px;
+  background: #fff;
+  color: #536982;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.variant-matrix-price-card {
+  min-width: 122px;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 5px 14px rgba(15, 23, 42, .12);
+}
+
+.variant-matrix-price-card span {
+  color: #536982;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: line-through;
+}
+
+.variant-matrix-price-card input {
+  width: 82px;
+  border: 0;
+  background: transparent;
+  color: #536982;
+  font-size: 13px;
+  font-weight: 850;
+  outline: none;
 }
 
 .var-badge {

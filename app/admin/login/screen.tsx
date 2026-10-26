@@ -1,14 +1,15 @@
 "use client";
+import {adminFetch} from '@/lib/admin-request';
 import {useEffect,useState} from 'react';
 import {ArrowRight,ArrowLeft,LockKeyhole,ShieldCheck,Package,ChartNoAxesCombined,Users,LoaderCircle,Eye,EyeOff} from 'lucide-react';
 export default function Login({verifiedEmail,signIn,next,initialMode}:{verifiedEmail:string|null;signIn:string;next:string;initialMode:string}){
- const [mode,setMode]=useState(initialMode),[email,setEmail]=useState(verifiedEmail||''),[password,setPassword]=useState(''),[confirm,setConfirm]=useState(''),[currentPassword,setCurrentPassword]=useState(''),[show,setShow]=useState(false),[token,setToken]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
+ const [mode,setMode]=useState(initialMode),[email,setEmail]=useState(verifiedEmail||''),[password,setPassword]=useState(''),[confirm,setConfirm]=useState(''),[currentPassword,setCurrentPassword]=useState(''),[code,setCode]=useState(''),[show,setShow]=useState(false),[token,setToken]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
  useEffect(()=>{const reset=new URLSearchParams(location.hash.slice(1)).get('reset');if(reset){setMode('reset');setToken(reset);history.replaceState(null,'',location.pathname+location.search)}},[]);
- function switchMode(value:string){setMode(value);setError('');setMessage('');setPassword('');setConfirm('');setCurrentPassword('');setShow(false)}
+ function switchMode(value:string){setMode(value);setError('');setMessage('');setPassword('');setConfirm('');setCurrentPassword('');setShow(false);setCode('')}
  const creating=['setup','reset','change'].includes(mode);
  async function submit(e:React.FormEvent){e.preventDefault();setError('');setMessage('');if(creating&&password!==confirm){setError('Your passwords do not match.');return}setBusy(true);try{
-  const payload={action:mode==='login'?'password-login':mode,email,password,currentPassword,token,next};
-  const r=await fetch('/api/access/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d:any=await r.json();if(!r.ok)throw Error(d.error||'Unable to complete this request.');
+  const payload={action:mode==='login'?'password-login':mode,email,password,currentPassword,token,next,code:code||undefined};
+  const r=await adminFetch('/api/access/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d:any=await r.json();if(!r.ok)throw Error(d.error||'Unable to complete this request.');
   if(mode==='login'){location.assign(d.next==='/admin/team'?'/admin/team':'/admin');return}
   if(mode!=='forgot'){switchMode('login');setToken('')};setMessage(d.message);
  }catch(e){setError((e as Error).message)}finally{setBusy(false)}}
@@ -17,7 +18,8 @@ export default function Login({verifiedEmail,signIn,next,initialMode}:{verifiedE
  {['login','setup','forgot'].includes(mode)&&<label>Email address<input type="email" required autoComplete="username" maxLength={254} value={mode==='setup'?verifiedEmail||'':email} readOnly={mode==='setup'} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label>}
  {mode==='change'&&<label>Current password<input type="password" autoComplete="current-password" required maxLength={128} value={currentPassword} onChange={e=>setCurrentPassword(e.target.value)}/></label>}
  {mode!=='forgot'&&<><label>{creating?'New password':'Password'}<div className="password-input"><input type={show?'text':'password'} autoComplete={creating?'new-password':'current-password'} required minLength={creating?15:1} maxLength={128} value={password} onChange={e=>setPassword(e.target.value)}/><button type="button" aria-label={show?'Hide password':'Show password'} aria-pressed={show} onClick={()=>setShow(!show)}>{show?<EyeOff size={18}/>:<Eye size={18}/>}</button></div>{creating&&<small>Use 15–128 characters. A unique passphrase works well.</small>}</label>{creating&&<label>Confirm new password<input type={show?'text':'password'} autoComplete="new-password" required minLength={15} maxLength={128} value={confirm} onChange={e=>setConfirm(e.target.value)}/></label>}</>}
- {mode==='login'&&<button type="button" className="password-forgot" onClick={()=>switchMode('forgot')}>Forgot password?</button>}
+ {mode!=='forgot'&&<label>Authenticator code (if enabled)<input value={code} onChange={e=>setCode(e.target.value.replace(/[^0-9]/g,''))} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} aria-label="Six-digit authenticator code" disabled={busy}/></label>}
+ {mode==='login'&&<button type="button" className="password-forgot" disabled={busy} onClick={()=>switchMode('forgot')}>Forgot password?</button>}
  <button className="login-submit" disabled={busy}>{busy?<><LoaderCircle className="login-spin" size={18}/>Please wait…</>:<>{mode==='login'?'Log in to admin':mode==='setup'?'Create password':mode==='forgot'?'Send recovery link':'Save new password'}<ArrowRight size={18}/></>}</button></form>}
  {error&&<div className="login-error" role="alert"><p>{error}</p></div>}{message&&<div className="password-success" role="status">{message}</div>}
  {mode==='login'?<button className="login-switch" disabled={busy} onClick={()=>switchMode('setup')}>First time? Create your admin password</button>:<button className="login-switch" disabled={busy} onClick={()=>switchMode('login')}>Back to login</button>}

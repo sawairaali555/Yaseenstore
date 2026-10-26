@@ -7,6 +7,62 @@ import path from 'node:path';
 import ts from 'typescript';
 import {webcrypto} from 'node:crypto';
 import {createRequire} from 'node:module';
+test('local admin bypass is development-only and respects stored roles and account status', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, LOCAL_ADMIN_BYPASS: process.env.LOCAL_ADMIN_BYPASS };
+  try {
+    const h = harness();
+    const current = h.getCurrent();
+    current.host = '127.0.0.1:5174';
+    current.id = '';
+    process.env.LOCAL_ADMIN_BYPASS = 'true';
+    process.env.NODE_ENV = 'production';
+    await assert.rejects(h.server.actor('settings.edit'), /Sign in/);
+    assert.equal(h.db.prepare('SELECT count(*) n FROM access_users').get().n, 0);
+    process.env.NODE_ENV = 'development';
+    assert.equal((await h.server.actor('settings.edit')).id, 'local-dev-owner');
+    h.db.prepare("UPDATE access_users SET role='member' WHERE id='local-dev-owner'").run();
+    await assert.rejects(h.server.actor('settings.edit'), /role does not permit/);
+    h.db.prepare("UPDATE access_users SET status='removed' WHERE id='local-dev-owner'").run();
+    await assert.rejects(h.server.actor(), /inactive/);
+    current.host = 'evil.example:5174';
+    await assert.rejects(h.server.actor(), /Sign in/);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test('local write origins must match the request and are disabled in production', () => {
+  const saved = process.env.NODE_ENV;
+  const { origin } = harness().server;
+  const request = value => new Request('http://localhost:5174/api/admin', { headers: { origin: value } });
+  try {
+    process.env.NODE_ENV = 'development';
+    assert.doesNotThrow(() => origin(request('http://localhost:5174')));
+    assert.throws(() => origin(request('http://localhost:5173')), /Invalid request origin/);
+    process.env.NODE_ENV = 'production';
+    assert.throws(() => origin(request('http://localhost:5174')), /Invalid request origin/);
+    assert.doesNotThrow(() => origin(new Request(ORIGIN + '/api/admin', { headers: { origin: ORIGIN } })));
+  } finally {
+    if (saved === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = saved;
+  }
+});
+
+test('admin requests preserve cancellation, disable caching and reject HTML session responses', async () => {
+  const controller = new AbortController();
+  let signal;
+  const { adminFetch } = harness(async (_url, options) => {
+    assert.equal(options.cache, 'no-store');
+    signal = options.signal;
+    return Response.json({ ok: true });
+  }).load('lib/admin-request.ts');
+  assert.equal((await adminFetch('/api/admin', { signal: controller.signal })).status, 200);
+  controller.abort();
+  assert.equal(signal.aborted, true);
+  const html = harness(async () => new Response('<html>Login</html>', { status: 401, headers: { 'Content-Type': 'text/html' } })).load('lib/admin-request.ts');
+  await assert.rejects(html.adminFetch('/api/admin'), /session expired/);
+});
 const require=createRequire(import.meta.url);
 function stockProduct() {
   return { id: 'stock-test', name: 'Test shoes', category: 'Fashion', image: 'shoes',
@@ -53,6 +109,28 @@ test('product images retain uploaded paths and resolve legacy catalog names', ()
   assert.equal(productImage('/images/shoes.jpg'), '/images/shoes.jpg');
   assert.equal(productImage('shoes'), '/images/shoes.jpg');
   assert.equal(productImage('https://example.com/shoes.jpg'), 'https://example.com/shoes.jpg');
+  assert.equal(productImage('http://localhost:5173/api/media/green'), '/api/media/green');
+  assert.equal(productImage('http://127.0.0.1:5174/api/media/peach'), '/api/media/peach');
+  assert.equal(productImage('https://example.com/api/media/remote'), 'https://example.com/api/media/remote');
+});
+
+test('color listing images use the saved color galleries independently of the product cover', () => {
+  const { getVariantEffectiveImage, getColorGalleryImages } = harness().load('lib/inventory-engine.ts');
+  const product = {
+    ...stockProduct(), image: '/api/media/product-cover',
+    colorGalleries: {
+      Green: { mainImage: '/api/media/green-main', images: ['/api/media/green-detail'] },
+      ' Grey ': { images: ['/api/media/grey-main'] },
+      Peach: { mainImage: '/api/media/peach-main', images: [] },
+    },
+  };
+  for (const [color, expected] of [['green', '/api/media/green-main'], ['GREY', '/api/media/grey-main'], [' Peach ', '/api/media/peach-main']]) {
+    assert.equal(getVariantEffectiveImage(product, null, color).url, expected);
+    assert.equal(getColorGalleryImages(product, color)[0], expected);
+  }
+  assert.equal(getVariantEffectiveImage(product, { color: 'Green', image: '/api/media/size-specific' }).url, '/api/media/size-specific');
+  assert.equal(getVariantEffectiveImage(product, null, 'Unassigned').url, '/api/media/product-cover');
+  assert.equal(getVariantEffectiveImage({ ...product, colorGalleries: {} }, { color: 'Blue', image: '/api/media/blue' }).url, '/api/media/blue');
 });
 
 test('order API rejects customer overrides and persists correct variant stock and prices', async () => {
@@ -107,7 +185,7 @@ test('staff order percentage discounts apply once after item discounts', async (
   assert.equal(order.details.discount, 240);
 });
 const ORIGIN='https://zeliy-pakistan.coateddavid.chatgpt.site';
-function harness(fetcher=async()=>{throw Error("Unexpected network request")},bucket=undefined){const db=new DatabaseSync(':memory:');for(const f of fs.readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())db.exec(fs.readFileSync('drizzle/'+f,'utf8'));let current={email:'yaseenkhattak7@gmail.com',id:'auth-owner',cookie:''};const sessions={};const d1={prepare(q){let values=[];return {bind(...v){values=v;return this},first(){return db.prepare(q).get(...values)||null},all(){return {results:db.prepare(q).all(...values)}},run(){const r=db.prepare(q).run(...values);return {meta:{changes:Number(r.changes)}}}}},batch(statements){db.exec('BEGIN');try{const results=statements.map(s=>s.run());db.exec('COMMIT');return results}catch(e){db.exec('ROLLBACK');throw e}}};const cache={};function load(file){file=path.resolve(file);if(cache[file])return cache[file].exports;const module={exports:{}};cache[file]=module;const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;function req(id){if(id==='next/headers')return {headers:async()=>new Headers({'oai-authenticated-user-id':current.id||'','cookie':current.cookie,'user-agent':'Integration test','cf-connecting-ip':'192.0.2.1'})};if(id==='@/app/chatgpt-auth')return {getChatGPTUser:async()=>current.id?{email:current.email,displayName:current.email.split('@')[0],fullName:null}:null};if(id==='@/lib/store-data')return {...load("lib/store-data.ts"),database:()=>d1,catalog:async()=>load('app/catalog.ts').products,settings:async()=>({deliveryCharge:250,freeThreshold:5000,supportEmail:'',whatsapp:''})};if(id==='cloudflare:workers')return {env:{DB:d1,ADMIN_MFA_KEY:'ab'.repeat(32),BUCKET:bucket}};if(id.startsWith('@/'))return load(fs.existsSync(id.slice(2)+'.ts')?id.slice(2)+'.ts':id.slice(2)+'/index.ts');if(id.startsWith('.'))return load(path.resolve(path.dirname(file),id)+'.ts');return require(id)}vm.runInNewContext(code,{module,exports:module.exports,require:req,fetch:fetcher,AbortSignal,Response,Request,Headers,URL,URLSearchParams,console,structuredClone,crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,DataView,BigInt,btoa,atob,Date,setTimeout,process,Buffer});return module.exports}const api=load('app/api/access/[resource]/route.ts');const policy=load('lib/access/policy.ts');const server=load('lib/access/server.ts');const crypto=load('lib/access/crypto.ts');async function call(resource,data,origin=ORIGIN){const r=await api[data?'POST':'GET'](new Request(ORIGIN+'/api/access/'+resource,data?{method:'POST',headers:{origin,'Content-Type':'application/json'},body:JSON.stringify(data)}:{}),{params:Promise.resolve({resource:resource.split('?')[0]})});const result={status:r.status,data:await r.json()};if(r.headers.get('set-cookie')){current.cookie=r.headers.get('set-cookie').split(';')[0];sessions[current.email]=current.cookie}return result}function as(email){current={email,id:email==='yaseenkhattak7@gmail.com'?'auth-owner':'auth-'+email,cookie:sessions[email]||''}}async function owner(){as('yaseenkhattak7@gmail.com');await call('me');assert.equal((await call('me',{action:'connect'})).status,200)}async function add(email,role='member'){await owner();const r=await call('users',{action:'add',email,name:email.split('@')[0],role,reason:'Integration test account'});assert.equal(r.status,201,JSON.stringify(r));as(email);assert.equal((await call('me',{action:'activate'})).status,200);return r.data.id}return {db,d1,call,as,owner,add,policy,server,crypto,getCurrent:()=>current,setCookie:c=>current.cookie=c,load};}
+function harness(fetcher=async()=>{throw Error("Unexpected network request")},bucket=undefined){const db=new DatabaseSync(':memory:');for(const f of fs.readdirSync('drizzle').filter(f=>f.endsWith('.sql')).sort())db.exec(fs.readFileSync('drizzle/'+f,'utf8'));let current={email:'yaseenkhattak7@gmail.com',id:'auth-owner',cookie:''};const sessions={};const d1={prepare(q){let values=[];return {bind(...v){values=v;return this},first(){return db.prepare(q).get(...values)||null},all(){return {results:db.prepare(q).all(...values)}},execute(){const r=db.prepare(q).run(...values);return {meta:{changes:Number(r.changes)}}},run(){return Promise.resolve().then(()=>this.execute())}}},batch(statements){db.exec('BEGIN');try{const results=statements.map(s=>s.execute());db.exec('COMMIT');return results}catch(e){db.exec('ROLLBACK');throw e}}};const cache={};function load(file){file=path.resolve(file);if(cache[file])return cache[file].exports;const module={exports:{}};cache[file]=module;const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;function req(id){if(id==='next/headers')return {headers:async()=>new Headers({host:current.host||'','oai-authenticated-user-id':current.id||'','cookie':current.cookie,'user-agent':'Integration test','cf-connecting-ip':'192.0.2.1'})};if(id==='@/app/chatgpt-auth')return {getChatGPTUser:async()=>current.id?{email:current.email,displayName:current.email.split('@')[0],fullName:null}:null};if(id==='@/lib/store-data')return {...load("lib/store-data.ts"),database:()=>d1,catalog:async()=>load('app/catalog.ts').products,settings:async()=>({deliveryCharge:250,freeThreshold:5000,supportEmail:'',whatsapp:''})};if(id==='cloudflare:workers')return {env:{DB:d1,ADMIN_MFA_KEY:'ab'.repeat(32),BUCKET:bucket}};if(id.startsWith('@/'))return load(fs.existsSync(id.slice(2)+'.ts')?id.slice(2)+'.ts':id.slice(2)+'/index.ts');if(id.startsWith('.'))return load(path.resolve(path.dirname(file),id)+'.ts');return require(id)}vm.runInNewContext(code,{module,exports:module.exports,require:req,fetch:fetcher,AbortSignal,Response,Request,Headers,URL,URLSearchParams,console,structuredClone,crypto:webcrypto,TextEncoder,TextDecoder,Uint8Array,DataView,BigInt,btoa,atob,Date,setTimeout,process,Buffer});return module.exports}const api=load('app/api/access/[resource]/route.ts');const policy=load('lib/access/policy.ts');const server=load('lib/access/server.ts');const crypto=load('lib/access/crypto.ts');async function call(resource,data,origin=ORIGIN){const r=await api[data?'POST':'GET'](new Request(ORIGIN+'/api/access/'+resource,data?{method:'POST',headers:{origin,'Content-Type':'application/json'},body:JSON.stringify(data)}:{}),{params:Promise.resolve({resource:resource.split('?')[0]})});const result={status:r.status,data:await r.json()};if(r.headers.get('set-cookie')){current.cookie=r.headers.get('set-cookie').split(';')[0];sessions[current.email]=current.cookie}return result}function as(email){current={email,id:email==='yaseenkhattak7@gmail.com'?'auth-owner':'auth-'+email,cookie:sessions[email]||''}}async function owner(){as('yaseenkhattak7@gmail.com');await call('me');assert.equal((await call('me',{action:'connect'})).status,200)}async function add(email,role='member'){await owner();const r=await call('users',{action:'add',email,name:email.split('@')[0],role,reason:'Integration test account'});assert.equal(r.status,201,JSON.stringify(r));as(email);assert.equal((await call('me',{action:'activate'})).status,200);return r.data.id}return {db,d1,call,as,owner,add,policy,server,crypto,getCurrent:()=>current,setCookie:c=>current.cookie=c,load};}
 test('role hierarchy, self/peer protection and member privileges',async()=>{const h=harness();const a=await h.add('admin@example.com','admin');const m=await h.add('member@example.com');h.as('member@example.com');assert.equal((await h.call('users')).status,403);h.as('admin@example.com');assert.equal((await h.call('users',{action:'role',ids:[m],role:'super_admin',reason:'Attempt escalation'})).status,403);assert.equal((await h.call('users',{action:'remove',ids:[a],reason:'Attempt self edit'})).status,403);assert.equal((await h.call('users',{action:'add',email:'evil@example.com',name:'Evil',role:'admin',reason:'Attempt peer creation'})).status,403);await h.owner();assert.equal((await h.call('users',{action:'ban',ids:['owner'],reason:'Attempt owner ban',hours:null})).status,403)});
 test('ban and unban invalidate an existing session, expiry checked live',async()=>{const h=harness();const id=await h.add('member@example.com');const old=h.getCurrent().cookie;await h.owner();assert.equal((await h.call('users',{action:'ban',ids:[id],reason:'Abuse investigation',hours:1})).status,200);h.as('member@example.com');await assert.rejects(h.server.actor(),/banned/);assert.equal((await h.call('me',{action:'connect'})).status,403);await h.owner();assert.equal((await h.call('users',{action:'unban',ids:[id],reason:'Review complete'})).status,200);h.as('member@example.com');h.setCookie(old);await assert.rejects(h.server.actor(),/revoked/);assert.equal((await h.call('me',{action:'connect'})).status,200);assert.equal((await h.server.actor()).id,id);await h.owner();await h.call('users',{action:'ban',ids:[id],reason:'Temporary restriction',hours:1});h.db.prepare('UPDATE access_bans SET expires_at=? WHERE user_id=?').run(Date.now()-1,id);h.as('member@example.com');assert.equal((await h.call('me',{action:'connect'})).status,200)});
 test('role changes revoke sessions and member cannot read admin data',async()=>{const h=harness();const id=await h.add('admin@example.com','admin');await h.owner();assert.equal((await h.call('users',{action:'role',ids:[id],role:'member',reason:'Access reduced'})).status,200);h.as('admin@example.com');assert.equal((await h.call('users')).status,401);await h.call('me',{action:'connect'});assert.equal((await h.call('users')).status,403)});
@@ -144,3 +222,188 @@ test('new listing workflow saves drafts, validates options, publishes each color
 test('image uploads reject oversized and unsafe formats and enforce role checks',async()=>{const h=harness();await h.owner();const api=h.load('app/api/media/route.ts');const send=(body,headers={})=>api.POST(new Request(ORIGIN+'/api/media',{method:'POST',headers:{origin:ORIGIN,...headers},body}));assert.equal((await send('<svg onload="alert(1)"></svg>')).status,400);assert.equal((await send('x',{'content-length':String(4*1024*1024)})).status,413);await h.add('viewer@example.com');assert.equal((await send('anything')).status,403);});
 
 test('authorized image upload persists bytes and serves the returned product image URL',async()=>{const objects=new Map();const bucket={async put(key,bytes,metadata){objects.set(key,{body:bytes,httpMetadata:metadata.httpMetadata})},async get(key){return objects.get(key)}};const h=harness(undefined,bucket);await h.owner();const api=h.load('app/api/media/route.ts');const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jS1sAAAAASUVORK5CYII=','base64');const r=await api.POST(new Request(ORIGIN+'/api/media',{method:'POST',headers:{origin:ORIGIN,'Content-Type':'image/png'},body:png}));assert.equal(r.status,201);const data=await r.json();assert.ok(data.url.startsWith(ORIGIN+'/api/media/'));const id=data.url.split('/').pop();const reader=h.load('app/api/media/[id]/route.ts');const image=await reader.GET(new Request(data.url),{params:Promise.resolve({id})});assert.equal(image.status,200);assert.equal(image.headers.get('Content-Type'),'image/png');assert.equal(image.headers.get('X-Content-Type-Options'),'nosniff');assert.equal((await image.arrayBuffer()).byteLength,png.length);});
+
+async function adminFixture() {
+  const h = harness();
+  await h.owner();
+  const store = h.load('lib/store-data.ts');
+  await store.ensureInventoryTables();
+  await store.ensureReturnTables();
+  const product = stockProduct();
+  h.db.prepare('INSERT INTO catalog_records (id,data,status) VALUES (?,?,?)').run(product.id, JSON.stringify(product), product.status);
+  const details = { name: 'Test Buyer', phone: '03001234567', address: '123 Test Street', city: 'Lahore', codReceivedAmount: 0 };
+  const items = [{ id: product.id, variantId: 'red-m', color: 'Red', size: 'M', qty: 1, unitPrice: 1500, totalPrice: 1500, name: product.name, sku: 'RED-M' }];
+  h.db.prepare('INSERT INTO orders (id,token,details,items,total,status,created_at) VALUES (?,?,?,?,?,?,?)').run('ORDER-1', 'token', JSON.stringify(details), JSON.stringify(items), 1500, 'Pending', new Date().toISOString());
+  const api = h.load('app/api/admin/route.ts');
+  const send = async payload => {
+    const response = await api.POST(new Request(ORIGIN + '/api/admin', { method: 'POST', headers: { origin: ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }));
+    return { status: response.status, data: await response.json() };
+  };
+  const readProduct = () => JSON.parse(h.db.prepare('SELECT data FROM catalog_records WHERE id=?').get(product.id).data);
+  return { ...h, store, product, items, send, readProduct };
+}
+
+test('empty returns stay empty and unavailable return storage never supplies demonstration records', async () => {
+  const h = await adminFixture();
+  assert.equal((await h.store.getReturnRequests()).length, 0);
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM return_requests').get().n, 0);
+  h.db.prepare("UPDATE orders SET status='Delivered'").run();
+  h.db.exec("CREATE TRIGGER fail_returns BEFORE INSERT ON return_requests BEGIN SELECT RAISE(ABORT,'write failed'); END");
+  const result = await h.send({ action: 'create-return', orderId: 'ORDER-1', items: [{ ...h.items[0], orderedQty: 1, returnQty: 1 }], returnReason: 'Wrong size' });
+  assert.equal(result.status, 503);
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM return_requests').get().n, 0);
+  assert.equal(JSON.parse(h.db.prepare('SELECT details FROM orders').get().details).returnId, undefined);
+});
+
+test('cancellation restores the exact variant once and protects server-owned order details', async () => {
+  const h = await adminFixture();
+  let result = await h.send({ action: 'order', id: 'ORDER-1', status: 'Cancelled', details: { inventoryRestored: true, codReceivedAmount: 99999, name: 'Updated Buyer' } });
+  assert.equal(result.status, 200, JSON.stringify(result));
+  assert.equal(h.readProduct().variants[0].stock, 3);
+  assert.equal(h.readProduct().variants[1].stock, 3);
+  const details = JSON.parse(h.db.prepare('SELECT details FROM orders').get().details);
+  assert.equal(details.codReceivedAmount, 0);
+  assert.equal(details.name, 'Updated Buyer');
+  result = await h.send({ action: 'order', id: 'ORDER-1', status: 'Cancelled' });
+  assert.equal(result.status, 200);
+  assert.equal(h.readProduct().variants[0].stock, 3);
+  assert.equal((await h.send({ action: 'order', id: 'ORDER-1', status: 'Pending' })).status, 409);
+});
+
+test('cancellation rejects missing variants rather than restoring another colour', async () => {
+  const h = await adminFixture();
+  h.db.prepare('UPDATE orders SET items=?').run(JSON.stringify([{ ...h.items[0], variantId: 'missing' }]));
+  const result = await h.send({ action: 'order', id: 'ORDER-1', status: 'Cancelled' });
+  assert.equal(result.status, 409);
+  assert.equal(h.readProduct().stock, 5);
+  assert.equal(h.db.prepare('SELECT status FROM orders').get().status, 'Pending');
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM inventory_logs').get().n, 0);
+});
+
+test('concurrent stock changes abort cancellation without losing inventory or changing the order', async () => {
+  const h = await adminFixture();
+  const batch = h.d1.batch;
+  let injected = false;
+  h.d1.batch = statements => {
+    if (!injected && statements.length > 5) {
+      injected = true;
+      const updated = h.readProduct();
+      updated.variants[0].stock = 1; updated.stock = 4;
+      h.db.prepare('UPDATE catalog_records SET data=? WHERE id=?').run(JSON.stringify(updated), h.product.id);
+    }
+    return batch(statements);
+  };
+  assert.equal((await h.send({ action: 'order', id: 'ORDER-1', status: 'Cancelled' })).status, 409);
+  assert.equal(h.readProduct().variants[0].stock, 1);
+  assert.equal(h.db.prepare('SELECT status FROM orders').get().status, 'Pending');
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM inventory_logs').get().n, 0);
+});
+
+test('stale product revisions are rejected and editor galleries and SEO slug persist', async () => {
+  const h = await adminFixture();
+  const revision = await h.crypto.digest(JSON.stringify(h.product));
+  const product = { ...h.product, _revision: revision, colorGalleries: { Red: { mainImage: '/images/shoes.jpg', images: ['/images/shoes.jpg'] } }, seo: { slug: 'test-shoes' } };
+  const saved = await h.send({ action: 'product', product });
+  assert.equal(saved.status, 200, JSON.stringify(saved));
+  assert.equal(h.readProduct().colorGalleries.Red.images[0], '/images/shoes.jpg');
+  assert.equal(h.readProduct().seo.slug, 'test-shoes');
+  assert.equal((await h.send({ action: 'product', product })).status, 409);
+});
+
+test('COD reversals cannot be replayed and invalid remittance batches do not partially settle orders', async () => {
+  const h = await adminFixture();
+  const settle = await h.send({ action: 'cod-settle', orderId: 'ORDER-1', amount: 500, settlementDate: '2026-10-08', courier: 'Test Courier', paymentMethod: 'Bank Transfer' });
+  assert.equal(settle.status, 200);
+  const transactionId = settle.data.details.codSettlementHistory[0].id;
+  const reversal = { action: 'cod-reverse', orderId: 'ORDER-1', transactionId, reason: 'Duplicate payment' };
+  assert.equal((await h.send(reversal)).status, 200);
+  assert.equal((await h.send(reversal)).status, 409);
+  const details = JSON.parse(h.db.prepare('SELECT details FROM orders').get().details);
+  assert.equal(details.codReceivedAmount, 0);
+  assert.equal(details.codCollected, false);
+  const remittance = { action: 'cod-bulk-remittance', remittanceId: 'REM-1', courier: 'Test Courier', settlementDate: '2026-10-08', referenceId: 'REF-1', paymentMethod: 'Bank Transfer', receivedAmount: 1000, orderSettlements: [{ orderId: 'ORDER-1', amount: 500 }, { orderId: 'MISSING', amount: 500 }] };
+  assert.equal((await h.send(remittance)).status, 404);
+  assert.equal(JSON.parse(h.db.prepare('SELECT details FROM orders').get().details).codReceivedAmount, 0);
+  assert.equal((await h.send({ ...remittance, orderSettlements: [{ orderId: 'ORDER-1', amount: 500 }, { orderId: 'ORDER-1', amount: 500 }] })).status, 400);
+});
+
+test('return quantities and prices derive from exact order lines and refunds commit atomically', async () => {
+  const h = await adminFixture();
+  h.db.prepare("UPDATE orders SET status='Delivered'").run();
+  const item = { ...h.items[0], orderedQty: 1, returnQty: 1, unitPrice: 999999 };
+  const create = { action: 'create-return', orderId: 'ORDER-1', items: [item], returnReason: 'Wrong size' };
+  assert.equal((await h.send({ ...create, items: [item, item] })).status, 400);
+  const created = await h.send(create);
+  assert.equal(created.status, 200, JSON.stringify(created));
+  assert.equal(created.data.returnRequest.totalRefundableAmount, 1500);
+  const returnId = created.data.returnRequest.id;
+  assert.equal((await h.send(create)).status, 400);
+  assert.equal((await h.send({ action: 'update-return-status', returnId, status: 'Refunded' })).status, 400);
+  assert.equal((await h.send({ action: 'update-return-status', returnId, status: 'Approved' })).status, 200);
+  const refund = { action: 'process-refund', returnId, refundAmount: 1500, refundMethod: 'Cash', refundReference: 'REFUND-1' };
+  h.db.exec("CREATE TRIGGER fail_order_write BEFORE UPDATE ON orders BEGIN SELECT RAISE(ABORT,'write failed'); END");
+  assert.equal((await h.send(refund)).status, 503);
+  assert.equal(h.db.prepare('SELECT refund_status FROM return_requests').get().refund_status, 'Pending');
+  assert.equal(h.db.prepare("SELECT COUNT(*) n FROM access_audit WHERE action='return.refunded'").get().n, 0);
+  h.db.exec('DROP TRIGGER fail_order_write');
+  assert.equal((await h.send(refund)).status, 200);
+  assert.equal((await h.send(refund)).status, 400);
+  assert.equal(h.db.prepare('SELECT refund_status FROM return_requests').get().refund_status, 'Refunded');
+  assert.equal(JSON.parse(h.db.prepare('SELECT details FROM orders').get().details).refundAmount, 1500);
+});
+
+test('return restock flags and inventory roll back together on write failure', async () => {
+  const h = await adminFixture();
+  h.db.prepare("UPDATE orders SET status='Delivered'").run();
+  const created = await h.send({ action: 'create-return', orderId: 'ORDER-1', items: [{ ...h.items[0], orderedQty: 1, returnQty: 1 }], returnReason: 'Wrong size' });
+  const returnId = created.data.returnRequest.id;
+  assert.equal((await h.send({ action: 'restock-return-items', returnId })).status, 409);
+  await h.send({ action: 'update-return-status', returnId, status: 'Received' });
+  await h.send({ action: 'inspect-return', returnId, inspectionStatus: 'Good Condition' });
+  h.db.exec("CREATE TRIGGER fail_return_write BEFORE UPDATE ON return_requests BEGIN SELECT RAISE(ABORT,'write failed'); END");
+  assert.equal((await h.send({ action: 'restock-return-items', returnId })).status, 503);
+  assert.equal(h.readProduct().variants[0].stock, 2);
+  assert.equal(JSON.parse(h.db.prepare('SELECT items FROM return_requests').get().items)[0].restocked, false);
+  h.db.exec('DROP TRIGGER fail_return_write');
+  assert.equal((await h.send({ action: 'restock-return-items', returnId })).status, 200);
+  assert.equal(h.readProduct().variants[0].stock, 3);
+  assert.equal((await h.send({ action: 'restock-return-items', returnId })).status, 400);
+});
+
+test('categories reject cycles and preserve built-in deletions across reloads', async () => {
+  const h = await adminFixture();
+  const api = h.load('app/api/categories/route.ts');
+  const send = async data => {
+    const response = await api.POST(new Request(ORIGIN + '/api/categories', { method: 'POST', headers: { origin: ORIGIN }, body: JSON.stringify(data) }));
+    return { status: response.status, data: await response.json() };
+  };
+  const roots = await h.store.categoryTreeForAdmins();
+  const root = roots.find(node => node.children.length > 0);
+  assert.equal((await send({ action: 'save', item: { ...root, parentId: root.children[0].id } })).status, 400);
+  assert.equal((await send({ action: 'save', item: { name: 'Test', parentId: 'missing' } })).status, 400);
+  const products = await h.store.catalog(true);
+  const flatten = nodes => nodes.flatMap(node => [node, ...flatten(node.children)]);
+  const unused = flatten(roots).find(node => !node.children.length && !products.some(product => [product.category, product.subcategory, product.childCategory].includes(node.name)));
+  assert.ok(unused, 'an unused built-in category exists');
+  assert.equal((await send({ action: 'delete', id: unused.id })).status, 200);
+  assert.equal(flatten(await h.store.categoryTree()).some(node => node.id === unused.id), false);
+});
+
+test('settings reject unsafe links and invalid percentage discounts; internal errors stay private', async () => {
+  const h = await adminFixture();
+  const settings = { deliveryCharge: 250, freeThreshold: 5000, supportEmail: '', whatsapp: '' };
+  assert.equal((await h.send({ action: 'settings', settings: { ...settings, heroButtonLink: 'javascript:alert(1)' } })).status, 400);
+  assert.equal((await h.send({ action: 'settings', settings: { ...settings, coupons: [{ id: 'c1', code: 'SAVE', type: 'percentage', value: 101, status: 'Active' }] } })).status, 400);
+  const response = h.server.fail(new Error('private database connection secret'));
+  assert.equal(response.status, 503);
+  assert.equal((await response.text()).includes('private database'), false);
+});
+
+test('CSV quoting preserves delimiters and neutralizes customer-supplied spreadsheet formulas', () => {
+  const { csvCell } = harness().load('lib/csv-export.ts');
+  assert.equal(csvCell('Lahore, Pakistan'), '"Lahore, Pakistan"');
+  assert.equal(csvCell('Buyer "Name"'), '"Buyer ""Name"""');
+  assert.equal(csvCell('=HYPERLINK("evil")'), '"\'=HYPERLINK(""evil"")"');
+  assert.equal(csvCell('+923001234567'), '"\'+923001234567"');
+  assert.equal(csvCell(-5), '-5');
+});

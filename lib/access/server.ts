@@ -1,4 +1,5 @@
 import {headers} from 'next/headers';
+import {ZodError} from 'zod';
 import {getChatGPTUser} from '@/app/chatgpt-auth';
 import {database} from '@/lib/store-data';
 import {OWNER_EMAIL,ROLES,User,has,ORIGIN,isAllowedOrigin} from './policy';
@@ -14,10 +15,14 @@ export async function passwordUser():Promise<User|null>{const h=await headers();
 export async function actor(permission?:string,session=true):Promise<User>{
  const requestHeaders=await headers();
  const host=requestHeaders.get('host')||'';
- if(process.env.LOCAL_ADMIN_BYPASS==='true'&&(host.startsWith('localhost:')||host.startsWith('127.0.0.1:'))){
+ if(process.env.NODE_ENV==='development'&&process.env.LOCAL_ADMIN_BYPASS==='true'&&/^(localhost|127\.0\.0\.1):\d+$/.test(host)){
   const local:User={id:'local-dev-owner',auth_id:'local-dev-owner',email:'local-admin@localhost',name:'Local Admin',role:'super_admin',status:'active',created_at:now(),last_seen:null,deleted_at:null,version:1,session_version:1};
   await database().batch([...Object.entries(ROLES).map(([id,r])=>sql('INSERT INTO access_roles (id,name,rank,permissions) VALUES (?,?,?,?) ON CONFLICT(id) DO NOTHING',id,r.name,r.rank,JSON.stringify(r.permissions))),sql('INSERT INTO access_users (id,auth_id,email,name,role,status,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',local.id,local.auth_id,local.email,local.name,local.role,local.status,local.created_at)]);
-  return (await sql('SELECT * FROM access_users WHERE id=?',local.id).first<User>())||local;
+  const stored=await sql('SELECT * FROM access_users WHERE id=?',local.id).first<User>();
+  if(!stored||stored.status!=='active'||await blocked(stored.id))throw new AccessError(403,'Your account is banned or inactive.');
+  if(permission==='content.edit'&&await blocked(stored.id,'mute'))throw new AccessError(403,'Your account is restricted from content management.');
+  if(permission&&!has(stored,permission))throw new AccessError(403,'Your role does not permit this action.');
+  return stored;
  }
  let u=session?await passwordUser():null;
  if(!u){const record=await userRecord(false);u=record.user;if(!u||u.status!=='active')throw new AccessError(403,u?.status==='removed'?'Your account has been removed.':'Activate your account from My account first.');
@@ -26,9 +31,18 @@ export async function actor(permission?:string,session=true):Promise<User>{
  if(permission==='content.edit'&&await blocked(u.id,'mute'))throw new AccessError(403,'Your account is restricted from content management.');
  if(permission&&!has(u,permission))throw new AccessError(403,'Your role does not permit this action.');return u;
 }
-export function origin(req:Request){const origin=req.headers.get('origin');if(!isAllowedOrigin(origin))throw new AccessError(403,'Invalid request origin.');}
-export async function body(req:Request){origin(req);if(Number(req.headers.get('content-length')||0)>50000)throw new AccessError(413,'Request is too large.');const reader=req.body?.getReader();let raw='',length=0;const decoder=new TextDecoder();if(reader){while(true){const {value,done}=await reader.read();if(done)break;length+=value.byteLength;if(length>50000){await reader.cancel();throw new AccessError(413,'Request is too large.');}raw+=decoder.decode(value,{stream:true});}raw+=decoder.decode();}try{return JSON.parse(raw)}catch{throw new AccessError(400,'Invalid JSON request')}}
-export function fail(e:unknown){if(e instanceof AccessError)return Response.json({error:e.message},{status:e.status,headers:{'Cache-Control':'no-store'}});if((e as any)?.name==='ZodError')return Response.json({error:(e as any).issues?.[0]?.message||'Check your form values.',details:(e as any).issues},{status:400});if(e instanceof Error)return Response.json({error:e.message},{status:400,headers:{'Cache-Control':'no-store'}});console.error('Access operation failed',e instanceof Error?e.message:'unknown');return Response.json({error:'Unable to complete this request. Refresh and try again.'},{status:503})}
+export function origin(req:Request){const value=req.headers.get('origin');const local=value!==ORIGIN;if(!isAllowedOrigin(value)||(local&&(process.env.NODE_ENV==='production'||value!==new URL(req.url).origin)))throw new AccessError(403,'Invalid request origin.');}
+export async function body(req:Request,maxBytes=50000){origin(req);if(Number(req.headers.get('content-length')||0)>maxBytes)throw new AccessError(413,'Request is too large.');const reader=req.body?.getReader();let raw='',length=0;const decoder=new TextDecoder();if(reader){while(true){const {value,done}=await reader.read();if(done)break;length+=value.byteLength;if(length>maxBytes){await reader.cancel();throw new AccessError(413,'Request is too large.');}raw+=decoder.decode(value,{stream:true});}raw+=decoder.decode();}try{return JSON.parse(raw)}catch{throw new AccessError(400,'Invalid JSON request')}}
+export function fail(e:unknown){
+ const headers={'Cache-Control':'no-store'};
+ if(e instanceof AccessError)return Response.json({error:e.message},{status:e.status,headers});
+ if(e instanceof ZodError)return Response.json({error:e.issues[0]?.message||'Check your form values.',details:e.issues},{status:400,headers});
+ const error=e&&typeof e==='object'?e as {name?:unknown;message?:unknown}:null;
+ if(error?.name==='SyntaxError')return Response.json({error:'Invalid JSON request.'},{status:400,headers});
+ if(/CHECK constraint failed|Authorization changed/.test(String(error?.message||e)))return Response.json({error:'This record or your access changed. Refresh before trying again.'},{status:409,headers});
+ console.error('Access operation failed',e);
+ return Response.json({error:'Unable to complete this request. Refresh and try again.'},{status:503,headers});
+}
 export const reply=(d:unknown,status=200,headers:Record<string,string>={})=>Response.json(d,{status,headers:{'Cache-Control':'no-store',...headers}});
 export async function rate(u:string,action:string,limit=30,ms=3600000){const t=now(),bucket=Math.floor(t/ms),key=u+':'+action+':'+bucket;const r=await sql('INSERT INTO access_rate (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count',key,t+ms*2).first<{count:number}>();await sql('DELETE FROM access_rate WHERE key IN (SELECT key FROM access_rate WHERE expires_at<? LIMIT 100)',t).run();if(r!.count>limit)throw new AccessError(429,'Rate limit reached. Please try again later.');}
 export async function audit(u:User,action:string,target:string,reason:string,metadata:unknown={}){const h=await headers();return sql('INSERT INTO access_audit (id,actor_id,target_id,action,reason,metadata,ip,device,created_at) VALUES (?,?,?,?,?,?,?,?,?)',crypto.randomUUID(),u.id,target,action,reason,JSON.stringify(metadata),h.get('cf-connecting-ip')?.slice(0,64)||null,h.get('user-agent')?.slice(0,300)||null,now())}

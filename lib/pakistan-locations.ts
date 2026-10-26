@@ -196,7 +196,24 @@ export function cleanPakistanPhone(raw?: string | null): string {
 
 export function isValidPakistanPhone(phone: string): boolean {
   const cleaned = cleanPakistanPhone(phone);
-  return /^03\d{9}$/.test(cleaned);
+  if (!/^03\d{9}$/.test(cleaned)) return false;
+  const national = cleaned.slice(1);
+  if (/^(\d)\1{9}$/.test(national)) return false;
+  if (/^30{9}$/.test(national)) return false;
+  if (/^3(012345678|123456789)$/.test(national)) return false;
+  return true;
+}
+
+export function normalizePakistanPhone(phone: string): string {
+  const cleaned = cleanPakistanPhone(phone);
+  return isValidPakistanPhone(cleaned) ? `+92${cleaned.slice(1)}` : "";
+}
+
+export function provinceForPakistanCity(city: string): string | undefined {
+  const match = city.trim().toLowerCase();
+  return Object.entries(PAKISTAN_CITIES_BY_PROVINCE).find(([, cities]) =>
+    cities.some((candidate) => candidate.toLowerCase() === match)
+  )?.[0];
 }
 
 export function getDefaultDeliveryChargeForProvince(
@@ -213,4 +230,3 @@ export function getDefaultDeliveryChargeForProvince(
   }
   return baseRate;
 }
-

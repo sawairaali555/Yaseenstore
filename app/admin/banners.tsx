@@ -19,6 +19,7 @@ import {
   Sliders,
 } from "lucide-react";
 import { toast } from "sonner";
+import { uploadAdminImage } from '@/lib/admin-request';
 import type { Settings, BannerSlide } from "@/lib/store-data";
 
 interface BannersManagerProps {
@@ -45,6 +46,7 @@ export default function BannersManager({ config: initialConfig, onSave }: Banner
   const [autoplay, setAutoplay] = useState(initialConfig.bannerAutoplay ?? true);
   const [interval, setIntervalVal] = useState(initialConfig.bannerInterval ?? 5);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // Live preview active slide state
@@ -68,6 +70,7 @@ export default function BannersManager({ config: initialConfig, onSave }: Banner
   }, [banners.length, previewIndex]);
 
   const handleAddSlide = () => {
+    if (saving || uploading || banners.length >= 20) return;
     setSaved(false);
     const newSlide: BannerSlide = {
       id: `banner-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -87,6 +90,7 @@ export default function BannersManager({ config: initialConfig, onSave }: Banner
   };
 
   const handleDeleteSlide = (id: string) => {
+    if (saving || uploading || !window.confirm('Remove this banner slide?')) return;
     setSaved(false);
     setBanners((prev) => prev.filter((s) => s.id !== id));
     toast.info("Banner slide removed");
@@ -104,22 +108,22 @@ export default function BannersManager({ config: initialConfig, onSave }: Banner
     });
   };
 
-  const handleImageUpload = (file: File, slideId: string) => {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please choose a valid image file (PNG, JPG, WebP)");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result as string;
-      handleUpdateSlide(slideId, { image: dataUrl });
-      toast.success("Banner image uploaded successfully");
-    };
-    reader.readAsDataURL(file);
+  const handleImageUpload = async (file: File, slideId: string) => {
+    if (uploading || saving) return;
+    setUploading(true);
+    try {
+      const url = await uploadAdminImage(file);
+      handleUpdateSlide(slideId, { image: url });
+      toast.success('Banner image uploaded');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Image upload failed.');
+    } finally { setUploading(false); }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving || uploading) return;
+    if (banners.some(banner => !banner.image.trim())) { toast.error('Add an image to every banner or remove the empty slides.'); return; }
     setSaving(true);
     setSaved(false);
 
@@ -187,7 +191,7 @@ export default function BannersManager({ config: initialConfig, onSave }: Banner
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={saving}
+            disabled={saving || uploading}
             className="inline-flex items-center gap-2 bg-[#203664] hover:bg-[#2c4985] text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-sm transition-all disabled:opacity-60 cursor-pointer"
           >
             {saved && !saving ? <CheckCircle2 size={16} /> : <Save size={16} />}
@@ -551,7 +555,7 @@ export default function BannersManager({ config: initialConfig, onSave }: Banner
 
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || uploading}
             className="inline-flex items-center gap-2 bg-[#203664] hover:bg-[#2c4985] text-white font-bold text-sm px-7 py-3 rounded-xl shadow-md transition-all disabled:opacity-60 cursor-pointer"
           >
             {saved && !saving ? <CheckCircle2 size={17} /> : <Save size={17} />}

@@ -330,6 +330,62 @@ export type Product = Omit<(typeof products)[number], "status" | "soldCount" | "
     tagsUrdu?: string;
   };
 };
+
+// Admin-only fixtures for testing product search, filters, menus and inventory.
+// They are intentionally excluded from the public storefront catalog.
+export const adminDemoProducts: Product[] = [
+  {
+    id: "demo-cotton-tshirt",
+    name: "Demo Product · Classic Cotton T-Shirt",
+    category: "Fashion",
+    subcategory: "Clothing",
+    price: 1299,
+    old: 1799,
+    image: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=700&auto=format&fit=crop&q=80",
+    color: "Demo Blue",
+    description: "A sample product for testing the admin product workflow.",
+    features: ["Soft cotton fabric", "Regular fit", "Machine washable"],
+    sizes: ["S", "M", "L", "XL"],
+    stock: 24,
+    status: "Active",
+    sku: "DEMO-TSHIRT-001",
+    tag: "Demo",
+  },
+  {
+    id: "demo-ceramic-mug",
+    name: "Demo Product · Minimal Ceramic Mug",
+    category: "Home & Kitchen",
+    subcategory: "Home essentials",
+    price: 899,
+    old: 1199,
+    image: "https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=700&auto=format&fit=crop&q=80",
+    color: "White",
+    description: "A sample home product for testing stock and product actions.",
+    features: ["Ceramic finish", "350 ml capacity", "Dishwasher safe"],
+    sizes: ["Standard"],
+    stock: 12,
+    status: "Active",
+    sku: "DEMO-MUG-001",
+    tag: "Demo",
+  },
+  {
+    id: "demo-wireless-earbuds",
+    name: "Demo Product · Wireless Earbuds",
+    category: "Electronics",
+    subcategory: "Audio",
+    price: 2499,
+    old: 3299,
+    image: "https://images.unsplash.com/photo-1606220945770-b5b6c2c55bf1?w=700&auto=format&fit=crop&q=80",
+    color: "Black",
+    description: "A sample electronics product for testing variants and inventory.",
+    features: ["Bluetooth connectivity", "Charging case included", "Touch controls"],
+    sizes: ["Standard"],
+    stock: 7,
+    status: "Draft",
+    sku: "DEMO-EARBUDS-001",
+    tag: "Demo",
+  },
+];
 export const money = (n: number) => "Rs. " + n.toLocaleString("en-PK");
 export const shipping = (subtotal: number) => (subtotal >= 5000 ? 0 : 250);
 

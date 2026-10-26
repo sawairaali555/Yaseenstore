@@ -1,4 +1,4 @@
-import { redirect } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { categoryTree } from '@/lib/store-data';
 
 function findName(nodes: Awaited<ReturnType<typeof categoryTree>>, slug: string): string | undefined {
@@ -17,5 +17,6 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
   const { slug } = await params;
   const tree = await categoryTree();
   const name = findName(tree, slug[slug.length - 1] || '');
-  redirect(name ? `/products?category=${encodeURIComponent(name)}` : '/products');
+  if (!name) notFound();
+  redirect(`/products?category=${encodeURIComponent(name)}`);
 }

@@ -24,6 +24,7 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
 const localBindingConfig = {
   main: "./worker/index.ts",
+  assets: { run_worker_first: ["/"] },
   compatibility_flags: ["nodejs_compat"],
   d1_databases: d1
     ? [
@@ -55,6 +56,9 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    // Let Vinext serve every app route, including /. The standalone marketplace
+    // HTML entry is only used by vite.marketplace.config.mjs.
+    appType: "custom",
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local"],

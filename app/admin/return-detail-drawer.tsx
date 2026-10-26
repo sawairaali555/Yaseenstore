@@ -61,11 +61,11 @@ interface Props {
   open: boolean;
   busy?: boolean;
   onOpenChange: (open: boolean) => void;
-  onUpdateStatus: (returnId: string, status: ReturnStatus, opts?: { rejectionReason?: string; courier?: string; trackingNumber?: string; note?: string }) => Promise<void>;
-  onInspect: (returnId: string, inspectionStatus: InspectionStatus, notes?: string) => Promise<void>;
-  onRestock: (returnId: string, itemIndexes?: number[], note?: string, action?: "restock" | "do_not_restock") => Promise<void>;
-  onProcessRefund: (returnId: string, data: { refundAmount: number; refundMethod: string; refundReference: string; refundAccountTitle?: string; refundAccountNumber?: string; refundBankName?: string; refundNotes?: string }) => Promise<void>;
-  onAddNote: (returnId: string, note: string) => Promise<void>;
+  onUpdateStatus: (returnId: string, status: ReturnStatus, opts?: { rejectionReason?: string; courier?: string; trackingNumber?: string; note?: string }) => Promise<boolean>;
+  onInspect: (returnId: string, inspectionStatus: InspectionStatus, notes?: string) => Promise<boolean>;
+  onRestock: (returnId: string, itemIndexes?: number[], note?: string, action?: "restock" | "do_not_restock") => Promise<boolean>;
+  onProcessRefund: (returnId: string, data: { refundAmount: number; refundMethod: string; refundReference: string; refundAccountTitle?: string; refundAccountNumber?: string; refundBankName?: string; refundNotes?: string }) => Promise<boolean>;
+  onAddNote: (returnId: string, note: string) => Promise<boolean>;
   onNavigateToOrder?: (orderId: string) => void;
 }
 
@@ -138,8 +138,8 @@ function ReturnDetailContent({
   const canShip = returnRequest.returnStatus === "Approved";
   const canReceive = returnRequest.returnStatus === "In Transit" || returnRequest.returnStatus === "Approved";
   const isReceived = ["Received", "Refunded"].includes(returnRequest.returnStatus) || returnRequest.inspectionStatus !== "Pending Inspection";
-  const canRestock = isReceived && returnRequest.inventoryAction !== "Restocked" && returnRequest.returnStatus !== "Rejected";
-  const canRefund = returnRequest.refundStatus !== "Refunded" && returnRequest.returnStatus !== "Rejected";
+  const canRestock = isReceived && returnRequest.inspectionStatus !== 'Pending Inspection' && returnRequest.inventoryAction !== "Restocked" && !['Rejected', 'Cancelled'].includes(returnRequest.returnStatus);
+  const canRefund = returnRequest.refundStatus !== "Refunded" && !['Requested', 'Rejected', 'Cancelled'].includes(returnRequest.returnStatus);
 
   const totalDeliveredQty = returnRequest.items.reduce((sum, it) => sum + it.orderedQty, 0);
   const totalReturningQty = returnRequest.items.reduce((sum, it) => sum + it.returnQty, 0);
@@ -889,7 +889,7 @@ function ReturnDetailContent({
                       Record customer payout details for returned items. The refund amount cannot exceed total refundable amount.
                     </p>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 14 }}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>
                         Refund Amount (PKR) <span style={{ color: "#dc2626" }}>*</span>
                         <input
@@ -1068,9 +1068,9 @@ function ReturnDetailContent({
                     value={newInternalNote}
                     onChange={(e) => setNewInternalNote(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && newInternalNote.trim()) {
-                        onAddNote(returnRequest.id, newInternalNote.trim());
-                        setNewInternalNote("");
+                      if (e.key === "Enter" && !busy && newInternalNote.trim()) {
+                        e.preventDefault();
+                        onAddNote(returnRequest.id, newInternalNote.trim()).then(saved => { if (saved) setNewInternalNote(''); });
                       }
                     }}
                     style={{ flex: 1, height: 38, borderRadius: 8, border: "1px solid #cbd5e1", padding: "0 12px", fontSize: 12.5 }}
@@ -1080,8 +1080,7 @@ function ReturnDetailContent({
                     disabled={busy || !newInternalNote.trim()}
                     onClick={() => {
                       if (newInternalNote.trim()) {
-                        onAddNote(returnRequest.id, newInternalNote.trim());
-                        setNewInternalNote("");
+                        onAddNote(returnRequest.id, newInternalNote.trim()).then(saved => { if (saved) setNewInternalNote(''); });
                       }
                     }}
                     style={{ padding: "0 16px", borderRadius: 8, background: "#2563eb", color: "#ffffff", fontSize: 12.5, fontWeight: 600, border: 0, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5 }}
@@ -1142,7 +1141,7 @@ function ReturnDetailContent({
               className="admin-primary"
               disabled={busy}
               onClick={async () => {
-                await onRestock(returnRequest.id, undefined, restockNote, "restock");
+                if (!(await onRestock(returnRequest.id, undefined, restockNote, "restock"))) return;
                 setRestockModalOpen(false);
                 toast.success("Returned items restocked into variant inventory!");
               }}
@@ -1187,7 +1186,7 @@ function ReturnDetailContent({
               className="admin-primary"
               disabled={busy}
               onClick={async () => {
-                await onProcessRefund(returnRequest.id, {
+                const saved = await onProcessRefund(returnRequest.id, {
                   refundAmount: Number(refundAmount),
                   refundMethod,
                   refundReference,
@@ -1196,6 +1195,7 @@ function ReturnDetailContent({
                   refundBankName,
                   refundNotes,
                 });
+                if (!saved) return;
                 setRefundConfirmOpen(false);
                 toast.success(`Refund of ${money(Number(refundAmount))} marked as completed!`);
               }}
@@ -1262,10 +1262,11 @@ function ReturnDetailContent({
               className="admin-primary"
               disabled={busy || !rejectionReasonInput.trim()}
               onClick={async () => {
-                await onUpdateStatus(returnRequest.id, "Rejected", {
+                const saved = await onUpdateStatus(returnRequest.id, "Rejected", {
                   rejectionReason: rejectionReasonInput,
                   note: rejectionNoteInput,
                 });
+                if (!saved) return;
                 setRejectModalOpen(false);
                 toast.success("Return request rejected.");
               }}

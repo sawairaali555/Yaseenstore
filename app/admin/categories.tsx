@@ -1,7 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-request";
+import { Fragment, useEffect, useState } from "react";
 import { ImagePlus, LoaderCircle, Pencil, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import type { CategoryNode } from "@/lib/categories";
 
 type Draft = {
@@ -48,12 +50,20 @@ function Tree({
   remove,
   viewChildren,
   toggle,
+  busy,
+  selectedParentId,
+  addChild,
+  close,
 }: {
   nodes: CategoryNode[];
   edit: (node: CategoryNode) => void;
   remove: (node: CategoryNode) => void;
   viewChildren: (node: CategoryNode) => void;
   toggle: (node: CategoryNode) => void;
+  busy: boolean;
+  selectedParentId: string | null;
+  addChild: (node: CategoryNode) => void;
+  close: () => void;
 }) {
   const rows = flatten(nodes).filter((node) => !node.parentId);
   return (
@@ -70,21 +80,17 @@ function Tree({
         </thead>
         <tbody>
           {rows.map((node) => (
-            <tr key={node.id}>
+            <Fragment key={node.id}>
+            <tr className={selectedParentId === node.id ? "category-parent-row is-expanded" : "category-parent-row"}>
               <td>{node.parentId ? "— " : ""}{node.name}</td>
               <td>{node.slug}</td>
               <td>
-                <span className={node.enabled ? "category-status active" : "category-status"}>
-                  {node.enabled ? "Active" : "Inactive"}
-                </span>
+                <Switch className="category-enabled-switch" checked={node.enabled} disabled={busy} onCheckedChange={() => toggle(node)} aria-label={`Enable ${node.name}`} title={node.enabled ? "Enabled" : "Disabled"} />
               </td>
               <td>{node.displayOrder + 1}</td>
               <td>
-                <button className="category-subcategories" type="button" onClick={() => viewChildren(node)}>
+                <button className="category-subcategories" type="button" aria-label={`Subcategories of ${node.name}`} aria-expanded={selectedParentId === node.id} aria-controls={selectedParentId === node.id ? `subcategory-panel-${node.id}` : undefined} onClick={() => viewChildren(node)}>
                   Sub categories ({node.children.length})
-                </button>
-                <button type="button" className={node.enabled ? "category-toggle active" : "category-toggle"} onClick={() => toggle(node)}>
-                  {node.enabled ? "Disable" : "Enable"}
                 </button>
                 <button type="button" aria-label={`Edit ${node.name}`} onClick={() => edit(node)}>
                   <Pencil size={15} />
@@ -94,6 +100,12 @@ function Tree({
                 </button>
               </td>
             </tr>
+            {selectedParentId === node.id && <tr className="category-expanded-row">
+              <td colSpan={5} className="category-expanded-cell">
+                <SubcategoryTable parent={node} edit={edit} remove={remove} addChild={addChild} toggle={toggle} busy={busy} close={close} />
+              </td>
+            </tr>}
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -108,6 +120,7 @@ function SubcategoryTable({
   addChild,
   toggle,
   close,
+  busy,
 }: {
   parent: CategoryNode;
   edit: (node: CategoryNode) => void;
@@ -115,9 +128,10 @@ function SubcategoryTable({
   addChild: (node: CategoryNode) => void;
   toggle: (node: CategoryNode) => void;
   close: () => void;
+  busy: boolean;
 }) {
   return (
-    <section className="admin-card subcategory-card">
+    <section id={`subcategory-panel-${parent.id}`} className="admin-card subcategory-card" aria-label={`${parent.name} subcategories`}>
       <div className="subcategory-head">
         <div>
           <h2>Sub categories</h2>
@@ -149,17 +163,12 @@ function SubcategoryTable({
                 <td>{node.name}</td>
                 <td>{node.slug}</td>
                 <td>
-                  <span className={node.enabled ? "category-status active" : "category-status"}>
-                    {node.enabled ? "Active" : "Inactive"}
-                  </span>
+                  <Switch className="category-enabled-switch" checked={node.enabled} disabled={busy} onCheckedChange={() => toggle(node)} aria-label={`Enable ${node.name}`} title={node.enabled ? "Enabled" : "Disabled"} />
                 </td>
                 <td>{node.displayOrder}</td>
                 <td>
                   <button type="button" className="category-icon-button edit" aria-label={`Edit ${node.name}`} onClick={() => edit(node)}>
                     <Pencil size={15} />
-                  </button>
-                  <button type="button" className={node.enabled ? "category-toggle active" : "category-toggle"} onClick={() => toggle(node)}>
-                    {node.enabled ? "Disable" : "Enable"}
                   </button>
                   <button type="button" className="category-icon-button delete" aria-label={`Delete ${node.name}`} onClick={() => remove(node)}>
                     <Trash2 size={15} />
@@ -195,12 +204,11 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
   const [message, setMessage] = useState("");
   const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const all = flatten(tree);
-  const selectedParent = selectedParentId ? all.find((node) => node.id === selectedParentId) || null : null;
 
   async function load() {
     setLoading(true);
     try {
-      const response = await fetch("/api/categories");
+      const response = await adminFetch("/api/categories?includeDisabled=1");
       const data: { categories?: CategoryNode[]; error?: string } = await response.json();
       if (!response.ok) throw Error(data.error);
       setTree(data.categories || []);
@@ -246,7 +254,7 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
   }
 
   function viewChildren(node: CategoryNode) {
-    setSelectedParentId(node.id);
+    setSelectedParentId(current => current === node.id ? null : node.id);
     setMessage("");
   }
 
@@ -259,7 +267,7 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
     setUploading(true);
     setMessage("");
     try {
-      const response = await fetch("/api/media", { method: "POST", headers: { "Content-Type": file.type }, body: file });
+      const response = await adminFetch("/api/media", { method: "POST", headers: { "Content-Type": file.type }, body: file });
       const data: { url?: string; error?: string } = await response.json();
       if (!response.ok) throw Error(data.error || "Upload failed.");
       setDraft((current) => ({ ...current, image: data.url || "" }));
@@ -275,7 +283,7 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch("/api/categories", {
+      const response = await adminFetch("/api/categories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "save", item: { ...draft, slug: draft.slug || draft.name, status: draft.enabled ? "Active" : "Inactive" } }),
@@ -296,6 +304,7 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
   }
 
   async function toggle(node: CategoryNode) {
+    if (busy || node.autoDisabled) return;
     setBusy(true);
     setMessage("");
     try {
@@ -313,7 +322,7 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
         metaKeywords: node.metaKeywords || "",
         metaDescription: node.metaDescription || "",
       };
-      const response = await fetch("/api/categories", {
+      const response = await adminFetch("/api/categories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "save", item }),
@@ -335,7 +344,7 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
     setBusy(true);
     setMessage("");
     try {
-      const response = await fetch("/api/categories", {
+      const response = await adminFetch("/api/categories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete", id: node.id }),
@@ -366,11 +375,8 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
           </button>
         </div>
         {message && <p role="status" className="admin-setting-note category-message">{message}</p>}
-        {loading ? <p className="category-loading">Loading categories...</p> : tree.length ? <Tree nodes={tree} edit={edit} remove={remove} viewChildren={viewChildren} toggle={toggle} /> : <p className="admin-empty">No categories yet.</p>}
+        {loading ? <p className="category-loading">Loading categories...</p> : tree.length ? <Tree nodes={tree} edit={edit} remove={remove} viewChildren={viewChildren} toggle={toggle} busy={busy} selectedParentId={selectedParentId} addChild={addChild} close={() => setSelectedParentId(null)} /> : <p className="admin-empty">No categories yet.</p>}
       </section>
-      {selectedParent && (
-        <SubcategoryTable parent={selectedParent} edit={edit} remove={remove} addChild={addChild} toggle={toggle} close={() => setSelectedParentId(null)} />
-      )}
 
       <Dialog open={modalOpen} onOpenChange={(open) => { if (!busy && !uploading) setModalOpen(open); }}>
         <DialogContent className="category-dialog" showCloseButton>
@@ -385,10 +391,7 @@ export default function Categories({ onChange }: { onChange?: (categories: Categ
               </label>
               <label>
                 Status
-                <select value={draft.enabled ? "Active" : "Inactive"} onChange={(event) => setDraft({ ...draft, enabled: event.target.value === "Active" })}>
-                  <option>Active</option>
-                  <option>Inactive</option>
-                </select>
+                <Switch className="category-enabled-switch" checked={draft.enabled} disabled={busy} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} aria-label="Enable category" title={draft.enabled ? "Enabled" : "Disabled"} />
               </label>
               <label>
                 Slug

@@ -1,4 +1,5 @@
 "use client";
+import { adminFetch } from "@/lib/admin-request";
 import { useEffect, useState, useRef } from "react";
 import {
   CheckCircle2,
@@ -90,7 +91,7 @@ export default function ImageManager({ product, open, busy = false, onOpenChange
       for (let i = 0; i < fileArray.length; i++) {
         const file = fileArray[i];
         setUploadProgress(`Uploading ${i + 1} of ${fileArray.length}…`);
-        const response = await fetch("/api/media", {
+        const response = await adminFetch("/api/media", {
           method: "POST",
           headers: { "Content-Type": file.type },
           body: file,
@@ -134,7 +135,7 @@ export default function ImageManager({ product, open, busy = false, onOpenChange
     const targetIdx = replaceIndex;
 
     try {
-      const response = await fetch("/api/media", {
+      const response = await adminFetch("/api/media", {
         method: "POST",
         headers: { "Content-Type": file.type },
         body: file,

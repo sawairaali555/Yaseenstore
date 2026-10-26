@@ -1,4 +1,5 @@
 "use client";
+import { adminFetch } from "@/lib/admin-request";
 
 import React, { useState, useMemo, useEffect } from "react";
 import {
@@ -535,7 +536,7 @@ export default function ManualOrderModal({
         })),
       };
 
-      const res = await fetch("/api/orders", {
+      const res = await adminFetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -914,7 +915,7 @@ export default function ManualOrderModal({
                   </div>
 
                   {/* Phone & Alt Phone */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <label style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>
@@ -976,7 +977,7 @@ export default function ManualOrderModal({
                   </div>
 
                   {/* Province & Destination City */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>
                         Province <span style={{ color: "#ef4444" }}>*</span>
@@ -1060,7 +1061,7 @@ export default function ManualOrderModal({
                   </div>
 
                   {/* Source & Initial Status */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>Order Source / Channel</label>
                       <select
@@ -1229,7 +1230,7 @@ export default function ManualOrderModal({
 
                     {/* Variant & Size Selection Row with Live Stock */}
                     {currentProduct && (
-                      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 1fr auto", gap: 8, alignItems: "flex-end" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 140px), 1fr))", gap: 8, alignItems: "flex-end" }}>
                         {/* Size / Variant */}
                         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                           <label style={{ fontSize: 11.5, fontWeight: 600, color: "#64748b" }}>

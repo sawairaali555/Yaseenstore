@@ -2,11 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Cartify Pakistan | Everyday finds, better prices",
-  description: "Shop fashion, beauty, home and tech in Pakistan. Discover the Cartify Pakistan sample storefront.",
-  other: {
-    "codex-preview": "development",
-  },
+  title: "GharCart | Everyday shopping in Pakistan",
+  description: "Shop useful everyday products with cash on delivery across Pakistan.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

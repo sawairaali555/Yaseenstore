@@ -6,6 +6,7 @@ const cartItem = z.object({
   size: z.string().min(1).max(40),
   color: z.string().max(50).optional(),
   variantId: z.string().max(100).optional(),
+  bundleId: z.string().max(100).optional(),
 });
 
 export function parseSavedCart(raw: string | null) {

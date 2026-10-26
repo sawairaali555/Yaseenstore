@@ -183,11 +183,11 @@ export default function Overview({
                   ))}
                 </div>
               </section>
-              <section className="admin-card">
+              <section className="admin-card seller-sales-card">
                 <div className="admin-card-head">
                   <div>
                     <h2>Sales overview</h2>
-                    <p>Test order value · excludes cancelled orders</p>
+                    <p>Revenue trend for {period.toLowerCase()} · excludes cancelled orders</p>
                   </div>
                   <div className="seller-legend">
                     <span>
@@ -202,30 +202,58 @@ export default function Overview({
                     )}
                   </div>
                 </div>
+                <div className="seller-sales-summary">
+                  <div>
+                    <span>Total sales</span>
+                    <strong>{money(revenue)}</strong>
+                  </div>
+                  <div>
+                    <span>Orders</span>
+                    <strong>{current.length}</strong>
+                  </div>
+                  <div>
+                    <span>Average order</span>
+                    <strong>{current.length ? money(Math.round(revenue / current.length)) : money(0)}</strong>
+                  </div>
+                </div>
                 <div className="seller-chart">
                   <ResponsiveContainer width="100%" height={270}>
                     <AreaChart data={chart} margin={{ left: 0, right: 20, top: 20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#6552f5" stopOpacity={0.18} />
+                          <stop offset="0%" stopColor="#6552f5" stopOpacity={0.24} />
                           <stop offset="100%" stopColor="#6552f5" stopOpacity={0} />
                         </linearGradient>
+                        <linearGradient id="previousSalesFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#94a3b8" stopOpacity={0.12} />
+                          <stop offset="100%" stopColor="#94a3b8" stopOpacity={0} />
+                        </linearGradient>
                       </defs>
-                      <CartesianGrid vertical={false} stroke="#eef0f6" strokeDasharray="3 4" />
+                      <CartesianGrid vertical={false} stroke="#e9edf6" strokeDasharray="4 6" />
                       <XAxis
                         dataKey="label"
                         axisLine={false}
                         tickLine={false}
                         minTickGap={40}
-                        tick={{ fontSize: 10, fill: "#8491a8" }}
+                        tick={{ fontSize: 11, fill: "#76839a", fontWeight: 600 }}
                       />
                       <YAxis
                         axisLine={false}
                         tickLine={false}
-                        tick={{ fontSize: 10, fill: "#8491a8" }}
+                        width={46}
+                        tick={{ fontSize: 11, fill: "#8a96aa", fontWeight: 600 }}
                         tickFormatter={(v) => (v >= 1000 ? v / 1000 + "k" : v)}
                       />
                       <Tooltip
+                        contentStyle={{
+                          border: "1px solid #e2e8f0",
+                          borderRadius: 12,
+                          boxShadow: "0 14px 35px rgba(36, 48, 71, .14)",
+                          color: "#243047",
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                        labelStyle={{ color: "#647187", fontWeight: 800 }}
                         formatter={(v: any, name: any) => [
                           money(Number(v)),
                           name === "current" ? "This period" : "Previous period",
@@ -235,8 +263,9 @@ export default function Overview({
                         <Area
                           type="linear"
                           dataKey="previous"
-                          stroke="#cbd3e2"
-                          fill="transparent"
+                          stroke="#b8c2d4"
+                          strokeWidth={2}
+                          fill="url(#previousSalesFill)"
                           strokeDasharray="5 5"
                         />
                       )}
@@ -252,7 +281,7 @@ export default function Overview({
                 </div>
                 {!current.length && (
                   <p className="seller-chart-note">
-                    No orders in this period. Your sales chart will update when orders arrive.
+                    No sales yet for this period. New orders will appear here automatically.
                   </p>
                 )}
               </section>

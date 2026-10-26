@@ -43,6 +43,13 @@
       "when": 1789025222222,
       "tag": "0005_massive_maestro",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791540000000,
+      "tag": "0006_tenant_owner_portal",
+      "breakpoints": true
     }
   ]
 }

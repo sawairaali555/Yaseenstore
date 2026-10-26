@@ -696,8 +696,11 @@ export function getVariantEffectiveImage(
 
   // Tier 2: Color gallery main image or first image
   const targetColor = (variant?.color || colorName || "").trim();
-  if (targetColor && product.colorGalleries?.[targetColor]) {
-    const cg = product.colorGalleries[targetColor];
+  const colorGallery = targetColor ? Object.entries(product.colorGalleries || {}).find(
+    ([name]) => name.trim().toLowerCase() === targetColor.toLowerCase()
+  )?.[1] : undefined;
+  if (colorGallery) {
+    const cg = colorGallery;
     if (cg.mainImage && cg.mainImage.trim() !== "") {
       return { url: cg.mainImage.trim(), source: "color" };
     }
@@ -736,8 +739,11 @@ export function getColorGalleryImages(
   colorName?: string
 ): string[] {
   const cName = (colorName || "").trim();
-  if (cName && product.colorGalleries?.[cName]) {
-    const cg = product.colorGalleries[cName];
+  const colorGallery = cName ? Object.entries(product.colorGalleries || {}).find(
+    ([name]) => name.trim().toLowerCase() === cName.toLowerCase()
+  )?.[1] : undefined;
+  if (colorGallery) {
+    const cg = colorGallery;
     const set = new Set<string>();
     if (cg.mainImage && cg.mainImage.trim() !== "") {
       set.add(cg.mainImage.trim());

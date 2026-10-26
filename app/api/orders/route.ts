@@ -1,5 +1,5 @@
 import { actor, blocked, AccessError, fail, actorGuard, sql, origin } from '@/lib/access/server';
-import { database, ensureInventoryTables } from '@/lib/store-data';
+import { database, ensureInventoryTables, syncCategoryAvailability } from '@/lib/store-data';
 import { getDb } from '@/db';
 import { orders } from '@/db/schema';
 import { and, eq } from 'drizzle-orm';
@@ -7,8 +7,10 @@ import { effectivePrice } from '@/app/catalog';
 import { catalog, settings, deliveryFor } from '@/lib/store-data';
 import { z } from 'zod';
 import { has } from '@/lib/access/policy';
+import { tenantForRequest } from '@/lib/multitenant';
 import { validateCartItems } from '@/lib/inventory-engine';
 import type { Product } from '@/app/catalog';
+import { calculatePromotions } from '@/lib/promotions';
 
 const itemSchema = z.object({
   id: z.string(),
@@ -16,6 +18,7 @@ const itemSchema = z.object({
   size: z.string().max(30),
   color: z.string().max(50).optional(),
   variantId: z.string().max(100).optional(),
+  bundleId: z.string().max(100).optional(),
   discount: z.number().int().min(0).max(1000000).optional(),
 });
 
@@ -32,6 +35,9 @@ const schema = z.object({
   source: z.string().max(80).optional(),
   postal: z.string().regex(/^(\d{5})?$/).optional(),
   note: z.string().max(500).optional(),
+  couponCode: z.string().trim().max(40).optional(),
+  checkoutRequestId: z.string().uuid().optional(),
+  isWhatsAppNumber: z.boolean().optional(),
   paymentMethod: z.string().optional(),
   csrStatus: z.string().max(80).optional(),
   csrAgent: z.string().max(80).optional(),
@@ -50,6 +56,7 @@ export async function POST(req: Request) {
   try {
     origin(req);
     const user = await actor();
+    const tenant = await tenantForRequest(user, new URL(req.url).searchParams.get('tenant'));
     if (await blocked(user.id, 'mute')) {
       throw new AccessError(403, 'Your account is restricted from placing orders.');
     }
@@ -60,9 +67,9 @@ export async function POST(req: Request) {
     const rawBody: any = await req.json().catch(() => ({}));
     if (rawBody && typeof rawBody.phone === 'string') {
       let p = rawBody.phone.replace(/[^\d+]/g, '').trim();
-      if (p.startsWith('+92')) p = '0' + p.slice(3);
-      else if (p.startsWith('923') && p.length === 12) p = '0' + p.slice(2);
-      else if (p.startsWith('3') && p.length === 10) p = '0' + p;
+      if (/^03\d{9}$/.test(p)) p = '+92' + p.slice(1);
+      else if (/^923\d{9}$/.test(p)) p = '+' + p;
+      else if (/^3\d{9}$/.test(p)) p = '+92' + p;
       rawBody.phone = p;
     }
 
@@ -75,6 +82,14 @@ export async function POST(req: Request) {
     }
 
     const { items, ...details } = parsed.data;
+    if (details.checkoutRequestId) {
+      const existing = await sql(
+        "SELECT id,token,total,status FROM orders WHERE json_extract(details, '$.tenantId')=? AND json_extract(details, '$.checkoutRequestId')=? LIMIT 1",
+        tenant.id,
+        details.checkoutRequestId,
+      ).first<{ id: string; token: string; total: number; status: string }>();
+      if (existing) return Response.json({ ...existing, duplicate: true });
+    }
     const managesOrders = has(user, 'orders.manage');
     if (!managesOrders && (
       items.some(item => item.discount !== undefined) ||
@@ -104,6 +119,7 @@ export async function POST(req: Request) {
       color: string;
       size: string;
       variantId?: string;
+      bundleId?: string;
       qty: number;
       unitPrice: number;
       discount: number;
@@ -176,6 +192,7 @@ export async function POST(req: Request) {
 
       const newStock = Math.max(0, previousStock - i.qty);
       const sku = matchedVariant?.sku || currentTarget.sku || currentTarget.id;
+      const selectedBundle = currentTarget.bundles?.find((bundle) => i.bundleId ? bundle.id === i.bundleId : bundle.quantity === i.qty);
 
       if (matchedVariant) {
         matchedVariant.stock = newStock;
@@ -200,7 +217,9 @@ export async function POST(req: Request) {
 
       productUpdates.set(p.id, currentTarget);
 
-      const unitPrice = matchedVariant?.price && Number(matchedVariant.price) > 0
+      const unitPrice = selectedBundle
+        ? Number(selectedBundle.price || 0) / Math.max(1, Number(selectedBundle.quantity || 1))
+        : matchedVariant?.price && Number(matchedVariant.price) > 0
         ? Number(matchedVariant.price)
         : effectivePrice(p);
       const itemDiscount = Math.max(0, Number(i.discount || 0));
@@ -215,6 +234,7 @@ export async function POST(req: Request) {
         color: matchedVariant?.color || i.color || p.color || '',
         size: matchedVariant?.size || i.size,
         variantId: matchedVariant?.id || i.variantId,
+        bundleId: selectedBundle?.id,
         qty: i.qty,
         unitPrice,
         discount: itemDiscount,
@@ -224,10 +244,31 @@ export async function POST(req: Request) {
     }
 
     const token = crypto.randomUUID();
-    const deliveryCharge = details.customDelivery !== undefined ? details.customDelivery : deliveryFor(subtotal, config);
-    const orderDiscount = details.discountType === 'percentage'
+    const automaticPromotion = calculatePromotions(items, activeProducts, config.offers || []);
+    const requestedCouponCode = String(details.couponCode || '').trim().toUpperCase();
+    const coupon = requestedCouponCode
+      ? (config.coupons || []).find(candidate => candidate.code.trim().toUpperCase() === requestedCouponCode)
+      : undefined;
+    if (requestedCouponCode && (!coupon || coupon.status !== 'Active')) {
+      return Response.json({ error: 'This coupon code is invalid or inactive.' }, { status: 400 });
+    }
+    if (coupon?.expiryDate && Date.parse(coupon.expiryDate) < Date.now()) {
+      return Response.json({ error: 'This coupon code has expired.' }, { status: 400 });
+    }
+    if (coupon && subtotal < Number(coupon.minSpend || 0)) {
+      return Response.json({ error: `Spend Rs. ${Number(coupon.minSpend || 0).toLocaleString('en-PK')} to use this coupon.` }, { status: 400 });
+    }
+    const couponBase = Math.max(0, subtotal - automaticPromotion.discount);
+    const couponDiscount = coupon
+      ? Math.min(couponBase, coupon.type === 'percentage'
+        ? Math.round(couponBase * Math.min(100, Number(coupon.value || 0)) / 100)
+        : Number(coupon.value || 0))
+      : 0;
+    const manualOrderDiscount = details.discountType === 'percentage'
       ? Math.round(subtotal * Math.min(100, details.customDiscount || 0) / 100)
       : Math.min(subtotal, details.customDiscount || 0);
+    const orderDiscount = Math.min(subtotal, manualOrderDiscount + automaticPromotion.discount + couponDiscount);
+    const deliveryCharge = details.customDelivery !== undefined ? details.customDelivery : deliveryFor(Math.max(0, subtotal - orderDiscount), config);
     const total = Math.max(0, subtotal + deliveryCharge - orderDiscount);
     const initialStatus = details.status || (details.csrStatus === 'Confirmed' ? 'Picklist' : 'Test order received');
 
@@ -243,10 +284,14 @@ export async function POST(req: Request) {
 
     const savedDetails = {
       ...details,
+      tenantId: tenant.id,
       inventoryRestored: false,
       deliveryCharge,
       discount: orderDiscount + totalItemDiscounts,
       orderDiscount,
+      automaticPromotion,
+      couponDiscount,
+      couponCode: coupon?.code,
       itemDiscountsTotal: totalItemDiscounts,
       csrStatus: details.csrStatus || (initialStatus === 'Picklist' ? 'Confirmed' : 'Pending'),
       csrConfirmedAt: details.csrStatus === 'Confirmed' ? details.csrConfirmedAt || nowIso : undefined,
@@ -259,19 +304,23 @@ export async function POST(req: Request) {
     // 1. Atomic product updates
     for (const [prodId, updatedProd] of productUpdates.entries()) {
       const snapshot = snapshots.results.find(row => row.id === prodId);
+      const nextData = JSON.stringify(updatedProd);
       const guardId = crypto.randomUUID();
-      statements.push(snapshot
-        ? sql('INSERT INTO access_guard (id,ok) SELECT ?,CASE WHEN EXISTS(SELECT 1 FROM catalog_records WHERE id=? AND data=? AND status=?) THEN 1 ELSE 0 END', guardId, prodId, snapshot.data, snapshot.status)
-        : sql('INSERT INTO access_guard (id,ok) SELECT ?,CASE WHEN NOT EXISTS(SELECT 1 FROM catalog_records WHERE id=?) THEN 1 ELSE 0 END', guardId, prodId));
-      statements.push(sql('DELETE FROM access_guard WHERE id=?', guardId));
-      statements.push(
-        sql(
-          'INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,status=excluded.status',
+      if (snapshot) {
+        statements.push(sql(
+          'UPDATE catalog_records SET data=?, status=? WHERE id=? AND data=? AND status=?',
+          nextData,
+          updatedProd.status,
           prodId,
-          JSON.stringify(updatedProd),
-          updatedProd.status
-        )
-      );
+          snapshot.data,
+          snapshot.status,
+        ));
+        statements.push(sql('INSERT INTO access_guard (id,ok) SELECT ?,CASE WHEN changes()=1 THEN 1 ELSE 0 END', guardId));
+      } else {
+        statements.push(sql('INSERT INTO catalog_records (id,data,status) VALUES (?,?,?) ON CONFLICT(id) DO NOTHING', prodId, nextData, updatedProd.status));
+        statements.push(sql('INSERT INTO access_guard (id,ok) SELECT ?,CASE WHEN changes()=1 THEN 1 ELSE 0 END', guardId));
+      }
+      statements.push(sql('DELETE FROM access_guard WHERE id=?', guardId));
     }
 
     // 2. Inventory audit log statements
@@ -328,6 +377,7 @@ export async function POST(req: Request) {
 
     try {
       await database().batch(statements);
+      await syncCategoryAvailability();
     } catch (error) {
       if (error instanceof Error && /CHECK constraint|Authorization changed/i.test(error.message)) {
         throw new AccessError(409, 'Stock or account access changed while placing your order. Refresh your bag and try again.');
