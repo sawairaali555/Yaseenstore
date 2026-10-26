@@ -1,34 +1,40 @@
-// Storefront integration placeholders — edit these four values for your store.
+import { products as storeCatalog } from "../../app/catalog.ts";
+
+// Use the public storefront seed catalog shared with the main application.
+// Admin-only test products are exported separately and never reach this list.
 export const STORE_CONFIG = {
-  checkoutUrl: "/checkout", // TODO: Replace if your checkout lives at a different URL.
-  whatsappNumber: "923001234567", // TODO: Country code + number, without + or spaces.
-  deliveryFee: 199, // TODO: Standard delivery charge in PKR.
-  freeDeliveryThreshold: 3000, // TODO: Free-delivery cart value in PKR.
+  checkoutUrl: "/checkout",
+  whatsappNumber: "923001234567",
+  deliveryFee: 199,
+  freeDeliveryThreshold: 3000,
 };
 
-// These IDs and options match the existing checkout catalog.
-export const products = [
-  {
-    id: "demo-wireless-earbuds", name: "Demo product · Wireless earbuds", category: "Electronics",
-    price: 2499, oldPrice: 3299, images: ["/images/headphones.jpg"], stock: 7,
-    variants: [{ name: "Color", values: ["Black"] }], rating: 0, reviewCount: 0, soldCount: 0,
-    description: "A sample electronics product for testing variants, inventory and your checkout connection.",
-  },
-  {
-    id: "demo-ceramic-mug", name: "Demo product · Minimal ceramic mug", category: "Home & kitchen",
-    price: 899, oldPrice: 1199, images: ["/images/kitchen.jpg"], stock: 12,
-    variants: [{ name: "Color", values: ["White"] }], rating: 0, reviewCount: 0, soldCount: 0,
-    description: "A simple ceramic mug for testing stock, product actions and checkout behavior.",
-  },
-  {
-    id: "womens-seamless-high-waist-panties-soft-comfortable-daisy-print-underwear-1792127586002",
-    name: "Women's seamless high-waist panties", category: "Fashion", price: 599, oldPrice: 900,
-    images: ["/images/beauty.jpg"], stock: 6,
-    variants: [{ name: "Size", values: ["L", "XL"] }, { name: "Color", values: ["Green"] }],
-    rating: 0, reviewCount: 0, soldCount: 0,
-    description: "Soft seamless high-waist briefs with a comfortable everyday fit and daisy detail.",
-  },
-];
+const toVariantOptions = (product) => {
+  if (product.variantOptions?.length) return product.variantOptions;
 
-export const categories = ["All products", ...new Set(products.map(product => product.category))];
-export const money = value => `Rs. ${Number(value).toLocaleString("en-PK")}`;
+  const options = [];
+  if (product.sizes?.length) options.push({ name: "Size", values: product.sizes });
+  if (product.color) options.push({ name: "Color", values: [product.color] });
+  return options;
+};
+
+export const products = storeCatalog
+  .filter((product) => product.status === "Active")
+  .map((product) => ({
+    id: product.id,
+    name: product.name,
+    category: product.category,
+    price: product.offerPrice ?? product.price,
+    oldPrice: product.old ?? product.regularPrice ?? product.price,
+    images: product.images?.length ? product.images : [product.image],
+    stock: product.stock ?? 0,
+    variants: toVariantOptions(product),
+    rating: 0,
+    reviewCount: product.reviews?.length ?? 0,
+    soldCount: Number.parseInt(product.soldCount ?? "0", 10) || 0,
+    description: product.description ?? product.shortDescription ?? "",
+  }))
+  .filter((product) => product.images[0]);
+
+export const categories = ["All products", ...new Set(products.map((product) => product.category))];
+export const money = (value) => `Rs. ${Number(value).toLocaleString("en-PK")}`;
