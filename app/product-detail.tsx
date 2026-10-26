@@ -333,8 +333,8 @@ export default function ProductDetail({
         </div>
         <div className="pdp-info">
           <span className="pdp-category">{p.category}</span>
-          <h1>{p.name}</h1>
-          <div className="pdp-pricing" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          <h1 style={isBundlePricing ? { fontSize: 25, lineHeight: 1.2, letterSpacing: "-.5px", margin: "8px 0 10px" } : undefined}>{p.name}</h1>
+          <div className="pdp-pricing" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isBundlePricing ? 0 : 16 }}>
             <strong style={{ fontSize: 28, fontWeight: 700, color: "#1e293b" }}>{money(displayPrice)}</strong>
             {priceSaving > 0 && <del style={{ fontSize: 16, color: "#94a3b8" }}>{money(comparePrice)}</del>}
             {(priceSaving > 0 || (!isBundlePricing && offer)) && (
@@ -347,7 +347,7 @@ export default function ProductDetail({
               <b style={{ marginLeft: 4 }}>{averageRating}</b> <u style={{ marginLeft: 4 }}>{reviewCount} {reviewCount === 1 ? "review" : "reviews"}</u>
             </button>
           </div>
-          <section className="pdp-deal-box" aria-label="Product offer">
+          <section className="pdp-deal-box" aria-label="Product offer" style={isBundlePricing ? { margin: 0 } : undefined}>
             {!isBundlePricing && <div className="pdp-deal-strip" style={{ background: "#ff0000", color: "#fff", display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 4, overflow: "hidden", height: 38 }}>
               <strong style={{ background: "#facc15", color: "#b91c1c", fontStyle: "italic", fontSize: 13, fontWeight: 900, padding: "0 12px", height: "100%", display: "flex", alignItems: "center" }}>LIGHTNING DEAL</strong>
               <span style={{ fontSize: 13, fontWeight: 700, paddingRight: 16 }}><Check size={15} /> Free shipping over PKR 3,000</span>
@@ -437,7 +437,7 @@ export default function ProductDetail({
 
             {isBundlePricing && (
               <div className="pdp-bundles">
-                <div className="pdp-bundles-heading"><span>BUNDLE &amp; SAVE</span></div>
+                <div className="pdp-bundles-heading"><span>Bundle &amp; Save</span></div>
                 <div className="pdp-bundle-options">
                   {p.bundles?.map((bundle, index) => {
                     const regular = (p.old > p.price ? p.old : p.price) * bundle.quantity;
@@ -467,18 +467,18 @@ export default function ProductDetail({
               </div>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: isBundlePricing ? "1fr" : "1fr 1fr", gap: 14, marginTop: 14 }}>
-              {!isBundlePricing && <button
+            <div style={{ display: "grid", gridTemplateColumns: isBundlePricing ? "1fr" : "1fr 1fr", gap: isBundlePricing ? 8 : 14, marginTop: isBundlePricing ? 8 : 14 }}>
+              <button
                 type="button"
-                style={{ width: "100%", height: 48, background: "#ff5000", color: "#ffffff", borderRadius: 24, fontSize: 15, fontWeight: 700, border: 0, cursor: "pointer", boxShadow: "0 4px 12px rgba(255,80,0,.25)" }}
-                disabled={!inStock || !selectedInStock}
+                style={{ width: "100%", height: 48, background: isBundlePricing ? "#080808" : "#ff5000", color: "#ffffff", borderRadius: isBundlePricing ? 8 : 24, fontSize: 15, fontWeight: 700, border: 0, cursor: "pointer", boxShadow: isBundlePricing ? "0 5px 14px #0000002b" : "0 4px 12px rgba(255,80,0,.25)" }}
+                disabled={!inStock || (!isBundlePricing && !selectedInStock)}
                 onClick={() => {
                   const bundle = p.bundles?.[selectedBundle];
                   add(bundle?.quantity || qty, bundle?.id, selectedColor, selectedVariant?.id);
                 }}
               >
                 Add to cart
-              </button>}
+              </button>
               <button
                 type="button"
                 className={`pdp-buy-pulse${isBundlePricing ? " pdp-buy-bundle" : ""}`}
