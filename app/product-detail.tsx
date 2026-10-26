@@ -333,7 +333,7 @@ export default function ProductDetail({
         </div>
         <div className="pdp-info">
           <span className="pdp-category">{p.category}</span>
-          <h1 style={isBundlePricing ? { fontSize: 25, lineHeight: 1.2, letterSpacing: "-.5px", margin: "8px 0 10px" } : undefined}>{p.name}</h1>
+          <h1 className={isBundlePricing ? "pdp-bundle-title" : undefined}>{p.name}</h1>
           <div className="pdp-pricing" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: isBundlePricing ? 0 : 16 }}>
             <strong style={{ fontSize: 28, fontWeight: 700, color: "#1e293b" }}>{money(displayPrice)}</strong>
             {priceSaving > 0 && <del style={{ fontSize: 16, color: "#94a3b8" }}>{money(comparePrice)}</del>}
