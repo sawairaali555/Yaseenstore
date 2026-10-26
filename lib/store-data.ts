@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import storefrontSnapshot from '../data/vercel-storefront-snapshot.json';
 import { products as seed, adminDemoProducts, Product, ProductVariant } from '@/app/catalog';
 export type { ProductVariant };
 import { buildDefaultCategoryTree, type CategoryNode } from '@/lib/categories';
@@ -797,7 +798,32 @@ export async function catalog(all=false):Promise<ManagedProduct[]>{
   const baseSeed = all ? [...seed, ...adminDemoProducts] : seed;
   const merged=new Map<string,ManagedProduct>(baseSeed.map(p=>[p.id,{...p,status:p.status || 'Active'}]));
   const db=database();
-  if(!db){return [...merged.values()].filter(p=>all||p.status==='Active');}
+  if(!db){
+    if(!all){
+      for(const item of storefrontSnapshot.products){
+        const options=item.checkoutOptions || [];
+        const product:ManagedProduct={
+          id:item.id,
+          name:item.name,
+          category:item.category,
+          subcategory:item.categoryPath?.[1] || '',
+          price:item.price,
+          old:item.originalPrice,
+          image:item.image,
+          images:[item.image],
+          description:item.description || '',
+          status:'Active',
+          stock:item.stock,
+          sizes:[...new Set(options.map(option=>option.size).filter(Boolean))],
+          variants:options.map(option=>({id:option.variantId || `${item.id}-${option.size}-${option.color}`,size:option.size,color:option.color,stock:option.stock,price:item.price,status:'Active'})),
+          soldCount:item.sold || '0',
+          storefront:{showOnStorefront:true},
+        };
+        merged.set(product.id,product);
+      }
+    }
+    return [...merged.values()].filter(p=>all||p.status==='Active');
+  }
   try{
     const rows=await db.prepare('SELECT id, data, status FROM catalog_records').all<{id:string;data:string;status:string}>();
     for(const row of rows.results){

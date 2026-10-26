@@ -1,0 +1,199 @@
+{
+  "products": [
+    {
+      "id": "demo-wireless-earbuds",
+      "name": "Demo Product · Wireless Earbuds",
+      "category": "Electronics",
+      "image": "https://images.unsplash.com/photo-1606220945770-b5b6c2c55bf1?w=700&auto=format&fit=crop&q=80",
+      "categoryPath": [
+        "Electronics",
+        "Audio"
+      ],
+      "price": 2499,
+      "originalPrice": 3299,
+      "description": "A sample electronics product for testing variants and inventory.",
+      "rating": 0,
+      "reviews": 0,
+      "sold": "0",
+      "stock": 7,
+      "checkoutOptions": [
+        {
+          "size": "Standard",
+          "color": "Black",
+          "variantId": "",
+          "stock": 7
+        }
+      ]
+    },
+    {
+      "id": "demo-ceramic-mug",
+      "name": "Demo Product · Minimal Ceramic Mug",
+      "category": "Home & Kitchen",
+      "image": "https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=700&auto=format&fit=crop&q=80",
+      "categoryPath": [
+        "Home & Kitchen",
+        "Home essentials"
+      ],
+      "price": 600,
+      "originalPrice": 1199,
+      "description": "A sample home product for testing stock and product actions.",
+      "rating": 0,
+      "reviews": 0,
+      "sold": "0",
+      "stock": 11,
+      "checkoutOptions": [
+        {
+          "size": "Standard",
+          "color": "White",
+          "variantId": "",
+          "stock": 11
+        }
+      ]
+    },
+    {
+      "id": "womens-seamless-high-waist-panties-soft-comfortable-daisy-print-underwear-1792127586002",
+      "name": "Women's Seamless High-Waist Panties – Soft Comfortable Daisy Print Underwear",
+      "category": "Women's Lingerie & Loungewear",
+      "image": "/images/storefront/womens-seamless-high-waist-panties-soft-comfortable-daisy-print-underwear-1792127586002.jpg",
+      "categoryPath": [
+        "Women's Lingerie & Loungewear",
+        "Panties"
+      ],
+      "price": 599,
+      "originalPrice": 900,
+      "description": "<p>Experience everyday comfort with our Women's Seamless High-Waist Panties. Featuring a soft, smooth design and a cute daisy flower detail, these panties offer a simple, stylish look for daily wear.</p><p><strong>Key Features:</strong></p><ul><li><p><strong>Seamless Design:</strong> Smooth appearance under clothing.</p></li><li><p><strong>Soft &amp; Comfortable:</strong> Designed for everyday comfort.</p></li><li><p><strong>High-Waist Style:</strong> Provides comfortable waist coverage.</p></li><li><p><strong>Cute Daisy Detail:</strong> Adds a feminine touch.</p></li><li><p><strong>Flexible Fit:</strong> Designed for ease of movement.</p></li><li><p><strong>Everyday Essential:</strong> Ideal for casual and daily wear.</p></li></ul><p><strong>Color:</strong> Light Grey-Green</p><p><strong>Style:</strong> High-Waist Seamless Briefs</p><p><strong>Package Includes:</strong> 1 × Women's Panty</p><p><strong>Perfect for everyday comfort, simplicity, and effortless style.</strong></p>",
+      "rating": 0,
+      "reviews": 0,
+      "sold": "0",
+      "stock": 6,
+      "checkoutOptions": [
+        {
+          "size": "L",
+          "color": "Green",
+          "variantId": "womens-seamless-high-waist-panties-soft-comfortable-daisy-print-underwear-green-l-1792127501104-553",
+          "stock": 1
+        },
+        {
+          "size": "XL",
+          "color": "Green",
+          "variantId": "womens-seamless-high-waist-panties-soft-comfortable-daisy-print-underwear-green-xl-1792127501104-108",
+          "stock": 1
+        }
+      ]
+    }
+  ],
+  "categories": [
+    {
+      "id": "fashion",
+      "parentId": null,
+      "name": "Fashion",
+      "slug": "fashion",
+      "image": "",
+      "enabled": true,
+      "autoDisabled": false,
+      "displayOrder": 0,
+      "description": "",
+      "metaTitle": "",
+      "metaKeywords": "",
+      "metaDescription": "",
+      "depth": 0,
+      "children": [
+        {
+          "id": "fashion-clothing",
+          "parentId": "fashion",
+          "name": "Clothing",
+          "slug": "clothing",
+          "image": "",
+          "enabled": true,
+          "displayOrder": 1,
+          "description": "",
+          "depth": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "home-kitchen",
+      "parentId": null,
+      "name": "Home & Kitchen",
+      "slug": "home-kitchen",
+      "image": "",
+      "enabled": true,
+      "autoDisabled": false,
+      "displayOrder": 2,
+      "description": "",
+      "metaTitle": "",
+      "metaKeywords": "",
+      "metaDescription": "",
+      "depth": 0,
+      "children": [
+        {
+          "id": "home-kitchen-home-essentials",
+          "parentId": "home-kitchen",
+          "name": "Home essentials",
+          "slug": "home-essentials",
+          "image": "",
+          "enabled": true,
+          "displayOrder": 2,
+          "description": "",
+          "depth": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "electronics",
+      "parentId": null,
+      "name": "Electronics",
+      "slug": "electronics",
+      "image": "",
+      "enabled": true,
+      "autoDisabled": false,
+      "displayOrder": 3,
+      "description": "",
+      "metaTitle": "",
+      "metaKeywords": "",
+      "metaDescription": "",
+      "depth": 0,
+      "children": [
+        {
+          "id": "electronics-audio",
+          "parentId": "electronics",
+          "name": "Audio",
+          "slug": "audio",
+          "image": "",
+          "enabled": true,
+          "displayOrder": 0,
+          "description": "",
+          "depth": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "women-s-lingerie-loungewear",
+      "parentId": null,
+      "name": "Women's Lingerie & Loungewear",
+      "slug": "women-s-lingerie-loungewear",
+      "image": "",
+      "enabled": true,
+      "displayOrder": 8,
+      "description": "",
+      "depth": 0,
+      "children": [
+        {
+          "id": "women-s-lingerie-loungewear-panties",
+          "parentId": "women-s-lingerie-loungewear",
+          "name": "Panties",
+          "slug": "panties",
+          "image": "",
+          "enabled": true,
+          "displayOrder": 2,
+          "description": "",
+          "depth": 1,
+          "children": []
+        }
+      ]
+    }
+  ]
+}
