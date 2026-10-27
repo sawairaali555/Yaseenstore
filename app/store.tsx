@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { themeForeground } from '@/lib/storefront-theme';
 import {
   Search,
   ShoppingBag,
@@ -79,6 +80,36 @@ const estimatedDeliveryRange = (city: string) => {
   return `${format(earliest)}–${format(latest)}`;
 };
 const estimatedDelivery = () => addWorkingDays(new Date(), 3).toLocaleDateString('en-PK', { month: 'short', day: 'numeric' });
+
+type ThemePreviewValues = Required<Pick<Settings,
+  | 'themePrimaryColor'
+  | 'themeAccentColor'
+  | 'themeBackgroundColor'
+  | 'themeTextColor'
+  | 'themeFooterColor'
+  | 'themeFooterTextColor'
+  | 'themeFontFamily'
+  | 'themeButtonRadius'
+  | 'themeCardRadius'
+>>;
+
+function isThemePreviewMessage(value: unknown): value is { type: 'cartify-theme-preview'; theme: ThemePreviewValues } {
+  if (!value || typeof value !== 'object') return false;
+  const message = value as { type?: unknown; theme?: unknown };
+  if (message.type !== 'cartify-theme-preview' || !message.theme || typeof message.theme !== 'object') return false;
+  const theme = message.theme as Record<string, unknown>;
+  return (
+    typeof theme.themePrimaryColor === 'string' && /^#[\da-f]{6}$/i.test(theme.themePrimaryColor) &&
+    typeof theme.themeAccentColor === 'string' && /^#[\da-f]{6}$/i.test(theme.themeAccentColor) &&
+    typeof theme.themeBackgroundColor === 'string' && /^#[\da-f]{6}$/i.test(theme.themeBackgroundColor) &&
+    typeof theme.themeTextColor === 'string' && /^#[\da-f]{6}$/i.test(theme.themeTextColor) &&
+    typeof theme.themeFooterColor === 'string' && /^#[\da-f]{6}$/i.test(theme.themeFooterColor) &&
+    typeof theme.themeFooterTextColor === 'string' && /^#[\da-f]{6}$/i.test(theme.themeFooterTextColor) &&
+    ['Inter, Arial, sans-serif', 'Georgia, serif', 'Verdana, sans-serif', 'system-ui, sans-serif'].includes(String(theme.themeFontFamily)) &&
+    ['6px', '12px', '20px', '999px'].includes(String(theme.themeButtonRadius)) &&
+    ['8px', '16px', '24px'].includes(String(theme.themeCardRadius))
+  );
+}
 
 function Choice({ value, onChange, items, label }: { value: string; onChange: (v: string) => void; items: string[]; label: string }) {
   return (
@@ -390,6 +421,29 @@ export default function Store({
   const submittingOrder = useRef(false);
   const checkoutRequestId = useRef('');
 
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('themePreview') !== '1') return;
+    const applyPreviewTheme = (event: MessageEvent<unknown>) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent || !isThemePreviewMessage(event.data)) return;
+      const storefront = document.querySelector<HTMLElement>('.cartify-storefront');
+      if (!storefront) return;
+      const theme = event.data.theme;
+      storefront.style.setProperty('--store-primary', theme.themePrimaryColor);
+      storefront.style.setProperty('--store-primary-foreground', themeForeground(theme.themePrimaryColor));
+      storefront.style.setProperty('--store-accent', theme.themeAccentColor);
+      storefront.style.setProperty('--store-accent-foreground', themeForeground(theme.themeAccentColor));
+      storefront.style.setProperty('--store-background', theme.themeBackgroundColor);
+      storefront.style.setProperty('--store-text', theme.themeTextColor);
+      storefront.style.setProperty('--store-footer', theme.themeFooterColor);
+      storefront.style.setProperty('--store-footer-text', theme.themeFooterTextColor);
+      storefront.style.setProperty('--store-font', theme.themeFontFamily);
+      storefront.style.setProperty('--store-button-radius', theme.themeButtonRadius);
+      storefront.style.setProperty('--store-card-radius', theme.themeCardRadius);
+    };
+    window.addEventListener('message', applyPreviewTheme);
+    return () => window.removeEventListener('message', applyPreviewTheme);
+  }, []);
+
   const resolvedTree = useMemo(() => categoryTreeNodes ?? buildDefaultCategoryTree(), [categoryTreeNodes]);
 
   useEffect(() => {
@@ -486,9 +540,10 @@ export default function Store({
 
   const favorite = (id: string) => setSaved((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
+  const productsById = useMemo(() => new Map(products.map(product => [product.id, product])), [products]);
   const cartValidation = validateCartItems(cart, products);
   const cartItemsWithDetails = cart.map((i, index) => {
-    const prod = products.find((p) => p.id === i.id);
+    const prod = productsById.get(i.id);
     const detail = prod ? getSizeAvailabilityDetails(prod, i.size, i.color) : null;
     const availableStock = detail ? detail.stock : 0;
     const validated = cartValidation.items[index];
@@ -1123,16 +1178,20 @@ export default function Store({
     return match ? img(match) : '';
   };
 
-  const p = products.find((p) => p.id === path[1]);
+  const p = productsById.get(path[1]);
 
   return (
     <div
       className={page === 'product' ? 'cartify-storefront marketplace' : 'cartify-storefront'}
       style={{
         "--store-primary": config.themePrimaryColor || "#203664",
+        "--store-primary-foreground": themeForeground(config.themePrimaryColor),
         "--store-accent": config.themeAccentColor || "#ff5000",
+        "--store-accent-foreground": themeForeground(config.themeAccentColor || '#ff5000'),
         "--store-background": config.themeBackgroundColor || "#ffffff",
         "--store-text": config.themeTextColor || "#1e293b",
+        "--store-footer": config.themeFooterColor || config.themePrimaryColor || "#203664",
+        "--store-footer-text": config.themeFooterTextColor || themeForeground(config.themeFooterColor || config.themePrimaryColor || "#203664"),
         "--store-font": config.themeFontFamily || "Inter, Arial, sans-serif",
         "--store-button-radius": config.themeButtonRadius || "12px",
         "--store-card-radius": config.themeCardRadius || "16px",

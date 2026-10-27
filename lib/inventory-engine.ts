@@ -513,9 +513,13 @@ export function validateCartItems(
   let subtotal = 0;
   let itemCount = 0;
   const reserved = new Map<string, number>();
+  const productsById = new Map<string, Product>();
+  for (const product of catalogProducts) {
+    if (!productsById.has(product.id)) productsById.set(product.id, product);
+  }
 
   for (const item of items) {
-    const prod = catalogProducts.find((p) => p.id === item.id);
+    const prod = productsById.get(item.id);
     if (!prod) {
       resultItems.push({
         id: item.id,

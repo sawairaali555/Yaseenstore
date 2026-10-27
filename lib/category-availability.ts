@@ -11,14 +11,23 @@ export function productHasStock(product: Product): boolean {
 }
 
 export function categoryAvailability(tree: CategoryNode[], products: Product[]): Map<string, boolean> {
-  const stocked = products.filter(productHasStock);
+  // Index each stocked path once instead of scanning the catalog for every node.
+  const pathsByName = new Map<string, Set<string>[]>();
+  for (const product of products) {
+    if (!productHasStock(product)) continue;
+    const path = new Set([product.category, product.subcategory, product.childCategory]
+      .filter((name): name is string => Boolean(name)));
+    for (const name of path) {
+      const paths = pathsByName.get(name) ?? [];
+      paths.push(path);
+      pathsByName.set(name, paths);
+    }
+  }
   const result = new Map<string, boolean>();
   const walk = (node: CategoryNode, ancestors: string[]): boolean => {
     const names = [...ancestors, node.name];
-    const direct = stocked.some(product => {
-      const path = [product.category, product.subcategory, (product as Product & { childCategory?: string }).childCategory].filter(Boolean);
-      return path.includes(node.name) && ancestors.every(name => path.includes(name));
-    });
+    const direct = (pathsByName.get(node.name) ?? []).some(path =>
+      ancestors.every(name => path.has(name)));
     const descendants = node.children.map(child => walk(child, names)).some(Boolean);
     const available = direct || descendants;
     result.set(node.id, available);

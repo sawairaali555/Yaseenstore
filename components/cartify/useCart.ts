@@ -12,9 +12,15 @@ function snapshot() {
     const text = localStorage.getItem(KEY);
     if (text !== cachedText) {
       cachedText = text;
-      const parsed = text ? JSON.parse(text) : {};
-      cachedCart = Object.fromEntries(Object.entries(parsed).filter(([, value]) =>
-        typeof value === "number" && Number.isInteger(value) && value > 0)) as Record<string, number>;
+      try {
+        const parsed: unknown = text ? JSON.parse(text) : {};
+        cachedCart = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? Object.fromEntries(Object.entries(parsed).filter(([, value]) =>
+            typeof value === "number" && Number.isSafeInteger(value) && value > 0))
+          : EMPTY;
+      } catch {
+        cachedCart = EMPTY;
+      }
     }
   } catch {
     // Keep the in-memory cart when browser storage is unavailable.
@@ -34,13 +40,18 @@ function subscribe(callback: () => void) {
 export function useCart() {
   const cart = useSyncExternalStore(subscribe, snapshot, () => EMPTY);
   function changeQuantity(id: string, delta: number) {
+    if (!id || !Number.isSafeInteger(delta)) return;
     const next = { ...snapshot() };
     const quantity = (next[id] ?? 0) + delta;
+    if (!Number.isSafeInteger(quantity)) return;
     if (quantity > 0) next[id] = quantity;
     else delete next[id];
     cachedCart = next;
-    cachedText = JSON.stringify(next);
-    try { localStorage.setItem(KEY, cachedText); } catch { /* Storage is optional. */ }
+    const text = JSON.stringify(next);
+    try {
+      localStorage.setItem(KEY, text);
+      cachedText = text;
+    } catch { /* Keep the last observed storage text so a failed write cannot undo the in-memory cart. */ }
     window.dispatchEvent(new Event("cartify-cart-change"));
   }
   return { cart, changeQuantity };

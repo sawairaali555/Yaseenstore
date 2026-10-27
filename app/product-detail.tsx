@@ -450,7 +450,7 @@ export default function ProductDetail({
                         onClick={() => setSelectedBundle(index)}
                         aria-pressed={selectedBundle === index}
                       >
-                        {index === 1 && p.bundles.length > 1 && <span className="pdp-bundle-popular">Most Popular</span>}
+                        {index === 1 && <span className="pdp-bundle-popular">Most Popular</span>}
                         <span className="pdp-bundle-radio" aria-hidden="true" />
                         <span className="pdp-bundle-copy">
                           <strong>{bundle.content?.trim() || `Buy ${bundle.quantity}`}</strong>

@@ -2,7 +2,7 @@ import { MapPin } from "lucide-react";
 
 export default function StoreFooter({ rootCategories }: { rootCategories: string[] }) {
   return (
-      <footer className="bg-[#172544] text-white pt-14 pb-8 border-t border-slate-800">
+      <footer className="store-footer pt-14 pb-8 border-t">
         <div className="wrap grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-8 pb-12 border-b border-white/10">
           {/* Col 1: Brand */}
           <div className="lg:col-span-4 space-y-4">

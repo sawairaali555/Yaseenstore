@@ -5,10 +5,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-
-test("renders development preview metadata in the Workers runtime", async (context) => {
+test("renders the production storefront in the Workers runtime", async (context) => {
   const root = fileURLToPath(new URL('../dist/server/', import.meta.url));
   const files = await readdir(root, { recursive: true });
   const names = ['index.js', ...files.filter(name => name.endsWith('.js') && name !== 'index.js')];
@@ -27,5 +24,8 @@ test("renders development preview metadata in the Workers runtime", async (conte
     response.headers.get("content-type") ?? "",
     /^text\/html\b/i,
   );
-  assert.match(await response.text(), developmentPreviewMeta);
+  const html = await response.text();
+  assert.ok(/<title>GharCart \| Everyday shopping in Pakistan<\/title>/.test(html), 'Storefront title is rendered');
+  assert.ok(/<main[\s>]/.test(html), 'Storefront main content is rendered');
+  assert.ok(/href="\/product\//.test(html), 'Catalog links are server rendered');
 });

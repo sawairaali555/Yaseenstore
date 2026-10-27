@@ -12,7 +12,9 @@ const fields = [
 
 export function publicStorefrontProduct(product: Product): Product {
   const result = Object.fromEntries(fields.filter(key => product[key] !== undefined).map(key => [key, product[key]]));
-  result.variants = product.variants?.map(({ costPrice: _costPrice, ...variant }) => variant);
-  result.reviews = product.reviews?.filter(review => !('status' in review) || review.status === 'Approved');
-  return result as Product;
+  return {
+    ...result,
+    variants: product.variants?.map(({ costPrice: _costPrice, ...variant }) => variant),
+    reviews: product.reviews?.filter(review => !('status' in review) || review.status === 'Approved'),
+  } as Product;
 }

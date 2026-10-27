@@ -33,12 +33,16 @@ export default function DealCarousel({ products, title, clearance = false }: { p
       </span>
     </h2>
     <div className="deal-carousel-track" ref={track} tabIndex={0} aria-label={`${title} products`}>
-      {products.map(product => <a href={'/product/' + encodeURIComponent(product.id)} className="temu-flash" key={product.id}>
+      {products.map(product => {
+        const stock = getVariantAvailableStock(product, null);
+        const price = effectivePrice(product);
+        return <a href={'/product/' + encodeURIComponent(product.id)} className="temu-flash" key={product.id}>
         <img src={productImage(product.image)} alt={product.name} loading="lazy" />
-        {getVariantAvailableStock(product) > 0 && <span>{getVariantAvailableStock(product)} in stock</span>}
-        <strong>Rs.{effectivePrice(product).toLocaleString('en-PK')}</strong>
-        {product.old > effectivePrice(product) && <del>{product.old.toLocaleString('en-PK')}</del>}
-      </a>)}
+        {stock > 0 && <span>{stock} in stock</span>}
+        <strong>Rs.{price.toLocaleString('en-PK')}</strong>
+        {product.old > price && <del>{product.old.toLocaleString('en-PK')}</del>}
+      </a>;
+      })}
     </div>
   </section>;
 }

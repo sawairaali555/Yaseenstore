@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Eye, Palette, Save, Type } from "lucide-react";
 import { toast } from "sonner";
 import type { Settings } from "@/lib/store-data";
@@ -12,17 +12,31 @@ const defaults = {
   themeAccentColor: "#ff5000",
   themeBackgroundColor: "#ffffff",
   themeTextColor: "#1e293b",
+  themeFooterColor: "#203664",
+  themeFooterTextColor: "#ffffff",
   themeFontFamily: "Inter, Arial, sans-serif",
   themeButtonRadius: "12px",
   themeCardRadius: "16px",
 };
 
 export default function ThemeEditor({ config, onSave }: ThemeEditorProps) {
-  const [draft, setDraft] = useState<Settings>({ ...config, ...defaults });
+  const previewFrame = useRef<HTMLIFrameElement>(null);
+  const [draft, setDraft] = useState<Settings>({
+    ...defaults,
+    ...config,
+    themeFooterColor: config.themeFooterColor || config.themePrimaryColor || defaults.themeFooterColor,
+  });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  useEffect(() => setDraft({ ...config, ...defaults }), [config]);
+  useEffect(() => {
+    setDraft({
+      ...defaults,
+      ...config,
+      themeFooterColor: config.themeFooterColor || config.themePrimaryColor || defaults.themeFooterColor,
+    });
+    setSaved(false);
+  }, [config]);
 
   const update = (key: keyof typeof defaults, value: string) => {
     setSaved(false);
@@ -42,15 +56,24 @@ export default function ThemeEditor({ config, onSave }: ThemeEditorProps) {
     }
   };
 
-  const themeStyle = {
-    "--preview-primary": draft.themePrimaryColor,
-    "--preview-accent": draft.themeAccentColor,
-    "--preview-bg": draft.themeBackgroundColor,
-    "--preview-text": draft.themeTextColor,
-    "--preview-font": draft.themeFontFamily,
-    "--preview-button-radius": draft.themeButtonRadius,
-    "--preview-card-radius": draft.themeCardRadius,
-  } as React.CSSProperties;
+  const syncPreview = useCallback(() => {
+    previewFrame.current?.contentWindow?.postMessage({
+      type: "cartify-theme-preview",
+      theme: {
+        themePrimaryColor: draft.themePrimaryColor,
+        themeAccentColor: draft.themeAccentColor,
+        themeBackgroundColor: draft.themeBackgroundColor,
+        themeTextColor: draft.themeTextColor,
+        themeFooterColor: draft.themeFooterColor,
+        themeFooterTextColor: draft.themeFooterTextColor,
+        themeFontFamily: draft.themeFontFamily,
+        themeButtonRadius: draft.themeButtonRadius,
+        themeCardRadius: draft.themeCardRadius,
+      },
+    }, window.location.origin);
+  }, [draft]);
+
+  useEffect(() => { syncPreview(); }, [syncPreview]);
 
   return (
     <div className="theme-editor-shell">
@@ -69,9 +92,16 @@ export default function ThemeEditor({ config, onSave }: ThemeEditorProps) {
       <div className="theme-editor-layout">
         <div className="theme-editor-controls">
           <section className="theme-editor-card">
-            <div className="theme-editor-card-title"><Palette size={16} /><div><b>Colors</b><span>Brand palette used across the storefront</span></div></div>
+            <div className="theme-editor-card-title"><Palette size={16} /><div><b>Colors</b><span>Customize your storefront background, text, header, accents, and footer independently.</span></div></div>
             <div className="theme-color-grid">
-              {([["themePrimaryColor", "Primary color"], ["themeAccentColor", "Accent color"], ["themeBackgroundColor", "Page background"], ["themeTextColor", "Text color"]] as [keyof typeof defaults, string][]).map(([key, label]) => (
+              {([
+                ["themePrimaryColor", "Header & primary color"],
+                ["themeAccentColor", "Accent color"],
+                ["themeBackgroundColor", "Page background"],
+                ["themeTextColor", "Body text color"],
+                ["themeFooterColor", "Footer background"],
+                ["themeFooterTextColor", "Footer text"],
+              ] as [keyof typeof defaults, string][]).map(([key, label]) => (
                 <label key={key} className="theme-color-field"><span>{label}</span><div><input type="color" value={String(draft[key])} onChange={(e) => update(key, e.target.value)} /><input value={String(draft[key])} onChange={(e) => update(key, e.target.value)} aria-label={`${label} hex value`} /></div></label>
               ))}
             </div>
@@ -86,22 +116,17 @@ export default function ThemeEditor({ config, onSave }: ThemeEditorProps) {
             </div>
           </section>
 
-          <section className="theme-editor-card">
-            <div className="theme-editor-card-title"><Eye size={16} /><div><b>Homepage content</b><span>Edit the existing live homepage copy</span></div></div>
-            <label className="theme-editor-field">Announcement text<input value={draft.announcementText || ""} onChange={(e) => setDraft((current) => ({ ...current, announcementText: e.target.value }))} /></label>
-            <label className="theme-editor-field">Hero headline<textarea rows={2} value={draft.heroTitle || ""} onChange={(e) => setDraft((current) => ({ ...current, heroTitle: e.target.value }))} /></label>
-            <div className="theme-editor-two-col"><label className="theme-editor-field">Hero subtitle<textarea rows={3} value={draft.heroSubtitle || ""} onChange={(e) => setDraft((current) => ({ ...current, heroSubtitle: e.target.value }))} /></label><label className="theme-editor-field">Primary button text<input value={draft.heroButtonText || ""} onChange={(e) => setDraft((current) => ({ ...current, heroButtonText: e.target.value }))} /></label></div>
-          </section>
         </div>
 
-        <section className="theme-editor-preview" style={themeStyle}>
+        <section className="theme-editor-preview">
           <div className="theme-editor-preview-label"><Eye size={14} /> Live storefront preview</div>
-          <div className="theme-preview-frame">
-            <div className="theme-preview-announcement">{draft.announcementText || "Your announcement appears here"}</div>
-            <div className="theme-preview-nav"><strong>YOUR BRAND</strong><span>Best sellers</span><span>New in</span><span>Categories</span><span>Search products</span><i>Bag</i></div>
-            <div className="theme-preview-hero"><div><small>{draft.heroKicker || "CURATED FOR EVERYDAY"}</small><h2>{draft.heroTitle || "Everyday essentials. Anything but ordinary."}</h2><p>{draft.heroSubtitle || "A clean preview of your storefront homepage."}</p><button>{draft.heroButtonText || "Shop now"}</button></div><div className="theme-preview-art" /></div>
-            <div className="theme-preview-products"><div /><div /><div /></div>
-          </div>
+          <iframe
+            ref={previewFrame}
+            className="theme-editor-preview-frame"
+            src="/?themePreview=1"
+            title="Live storefront theme preview"
+            onLoad={syncPreview}
+          />
         </section>
       </div>
     </div>

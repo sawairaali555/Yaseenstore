@@ -1,4 +1,5 @@
 "use client";
+import dynamic from "next/dynamic";
 import { adminFetch } from "@/lib/admin-request";
 import { AdminPagination, useAdminPagination } from './pagination';
 import { useEffect, useRef, useState } from "react";
@@ -112,26 +113,26 @@ import {
   isValidPakistanPhone,
 } from "@/lib/pakistan-locations";
 import { colors, packOptions } from "@/lib/listing-options";
-import Overview from "./overview";
-import Categories from "./categories";
-import Reviews from "./reviews";
+
+
+
 import ImageManager from "./image-manager";
 import AddColorModal from "./add-color-modal";
 import InventoryModal from "./inventory-modal";
 import StockHistoryModal from "./stock-history-modal";
 import RemoveColorModal from "./remove-color-modal";
-import ProductEditor from "./products/editor";
+
 import Logout from "./logout";
-import BannersManager from "./banners";
-import DealCarousels from "./deal-carousels";
-import ThemeEditor from "./theme-editor";
+
+
+
 import ManualOrderModal from "./manual-order-modal";
 import CustomerHistoryDrawer from "./customer-history-drawer";
-import CustomerIntelligence from "./customer-intelligence";
+
 import OrderHistoryDrawer from "./order-history-drawer";
 import CodSettlementModal from "./cod-settlement-modal";
 import DeleteOrderModal, { DeletionReason } from "./delete-order-modal";
-import ReturnsView from "./returns-view";
+
 import ReturnDetailDrawer from "./return-detail-drawer";
 import CreateReturnModal from "./create-return-modal";
 import type { ReturnRequest, ReturnStatus, InspectionStatus } from "@/lib/return-types";
@@ -154,6 +155,20 @@ import { getInventoryStatus, getVariantEffectiveImage, getColorGalleryImages, In
 import { productImage } from "@/lib/product-image";
 import type { CategoryNode } from "@/lib/categories";
 import type { ManagedProduct, Settings } from "@/lib/store-data";
+
+function AdminSectionLoading() {
+  return <p role="status" aria-live="polite">Loading section…</p>;
+}
+
+const Overview = dynamic(() => import("./overview"), { loading: AdminSectionLoading });
+const Categories = dynamic(() => import("./categories"), { loading: AdminSectionLoading });
+const Reviews = dynamic(() => import("./reviews"), { loading: AdminSectionLoading });
+const ProductEditor = dynamic(() => import("./products/editor"), { loading: AdminSectionLoading });
+const BannersManager = dynamic(() => import("./banners"), { loading: AdminSectionLoading });
+const DealCarousels = dynamic(() => import("./deal-carousels"), { loading: AdminSectionLoading });
+const ThemeEditor = dynamic(() => import("./theme-editor"), { loading: AdminSectionLoading });
+const CustomerIntelligence = dynamic(() => import("./customer-intelligence"), { loading: AdminSectionLoading });
+const ReturnsView = dynamic(() => import("./returns-view"), { loading: AdminSectionLoading });
 
 export type CsrStatus =
   | "Pending"
@@ -1256,6 +1271,7 @@ export default function Admin() {
         image: result.image || "",
         images: result.images || [],
         sourceUrl: result.sourceUrl || url,
+        stock: 0,
         status: "Draft",
       } as ManagedProduct;
       setImportedProduct(imported);

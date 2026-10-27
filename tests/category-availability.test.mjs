@@ -44,3 +44,12 @@ test('manually disabled parent hides its stocked child', () => {
   assert.equal(availability.get('shirts'), true);
   assert.deepEqual(visibleCategoryTree(tree, availability), []);
 });
+
+test('same-named categories only inherit stock from their own ancestors', () => {
+  const tree = [category('women', 'Women', [category('women-shirts', 'Shirts')]),
+    category('men', 'Men', [category('men-shirts', 'Shirts')])];
+  const availability = categoryAvailability(tree, [product('Women', 'Shirts', 2)]);
+  assert.equal(availability.get('women-shirts'), true);
+  assert.equal(availability.get('men-shirts'), false);
+  assert.deepEqual(visibleCategoryTree(tree, availability).map(node => node.id), ['women']);
+});

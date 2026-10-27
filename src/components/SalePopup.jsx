@@ -14,7 +14,7 @@ const shoppers = [
 
 export default function SalePopup() {
   const notices = useMemo(
-    () => shoppers.map((shopper, index) => ({ ...shopper, product: products[index % products.length] })),
+    () => products.length ? shoppers.map((shopper, index) => ({ ...shopper, product: products[index % products.length] })) : [],
     [],
   );
   const [index, setIndex] = useState(0);

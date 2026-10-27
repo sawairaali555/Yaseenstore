@@ -728,6 +728,8 @@ export type Settings = {
   themeAccentColor?: string;
   themeBackgroundColor?: string;
   themeTextColor?: string;
+  themeFooterColor?: string;
+  themeFooterTextColor?: string;
   themeFontFamily?: string;
   themeButtonRadius?: string;
   themeCardRadius?: string;
@@ -789,6 +791,8 @@ export const defaults: Settings = {
   themeAccentColor: '#ff5000',
   themeBackgroundColor: '#ffffff',
   themeTextColor: '#1e293b',
+  themeFooterColor: '#203664',
+  themeFooterTextColor: '#ffffff',
   themeFontFamily: 'Inter, Arial, sans-serif',
   themeButtonRadius: '12px',
   themeCardRadius: '16px',

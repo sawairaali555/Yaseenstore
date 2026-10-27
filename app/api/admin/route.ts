@@ -289,6 +289,8 @@ const settingSchema = z.object({
   themeAccentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   themeBackgroundColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   themeTextColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  themeFooterColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  themeFooterTextColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   themeFontFamily: z.enum(['Inter, Arial, sans-serif', 'Georgia, serif', 'Verdana, sans-serif', 'system-ui, sans-serif']).optional(),
   themeButtonRadius: z.enum(['6px', '12px', '20px', '999px']).optional(),
   themeCardRadius: z.enum(['8px', '16px', '24px']).optional(),
