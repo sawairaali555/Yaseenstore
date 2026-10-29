@@ -2,7 +2,7 @@ import {headers} from 'next/headers';
 import {ZodError} from 'zod';
 import {getChatGPTUser} from '@/app/chatgpt-auth';
 import {database} from '@/lib/store-data';
-import {OWNER_EMAIL,ROLES,User,has,ORIGIN,isAllowedOrigin} from './policy';
+import {OWNER_EMAIL,ROLES,User,has,ORIGIN,isAllowedOrigin,isProductionOrigin} from './policy';
 import {digest,randomToken} from './crypto';
 export class AccessError extends Error{constructor(public status:number,message:string){super(message)}}
 export const sql=(q:string,...v:any[])=>database().prepare(q).bind(...v);
@@ -31,7 +31,7 @@ export async function actor(permission?:string,session=true):Promise<User>{
  if(permission==='content.edit'&&await blocked(u.id,'mute'))throw new AccessError(403,'Your account is restricted from content management.');
  if(permission&&!has(u,permission))throw new AccessError(403,'Your role does not permit this action.');return u;
 }
-export function origin(req:Request){const value=req.headers.get('origin');const local=value!==ORIGIN;if(!isAllowedOrigin(value)||(local&&(process.env.NODE_ENV==='production'||value!==new URL(req.url).origin)))throw new AccessError(403,'Invalid request origin.');}
+export function origin(req:Request){const value=req.headers.get('origin');const local=!isProductionOrigin(value);if(!isAllowedOrigin(value)||(local&&(process.env.NODE_ENV==='production'||value!==new URL(req.url).origin)))throw new AccessError(403,'Invalid request origin.');}
 export async function body(req:Request,maxBytes=50000){origin(req);if(Number(req.headers.get('content-length')||0)>maxBytes)throw new AccessError(413,'Request is too large.');const reader=req.body?.getReader();let raw='',length=0;const decoder=new TextDecoder();if(reader){while(true){const {value,done}=await reader.read();if(done)break;length+=value.byteLength;if(length>maxBytes){await reader.cancel();throw new AccessError(413,'Request is too large.');}raw+=decoder.decode(value,{stream:true});}raw+=decoder.decode();}try{return JSON.parse(raw)}catch{throw new AccessError(400,'Invalid JSON request')}}
 export function fail(e:unknown){
  const headers={'Cache-Control':'no-store'};
@@ -44,7 +44,7 @@ export function fail(e:unknown){
  return Response.json({error:'Unable to complete this request. Refresh and try again.'},{status:503,headers});
 }
 export const reply=(d:unknown,status=200,headers:Record<string,string>={})=>Response.json(d,{status,headers:{'Cache-Control':'no-store',...headers}});
-export async function rate(u:string,action:string,limit=30,ms=3600000){const t=now(),bucket=Math.floor(t/ms),key=u+':'+action+':'+bucket;const r=await sql('INSERT INTO access_rate (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count',key,t+ms*2).first<{count:number}>();await sql('DELETE FROM access_rate WHERE key IN (SELECT key FROM access_rate WHERE expires_at<? LIMIT 100)',t).run();if(r!.count>limit)throw new AccessError(429,'Rate limit reached. Please try again later.');}
+export async function rate(u:string,action:string,limit=30,ms=3600000){const t=now(),bucket=Math.floor(t/ms),key=u+':'+action+':'+bucket;const r=await sql('INSERT INTO access_rate (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=access_rate.count+1 RETURNING count',key,t+ms*2).first<{count:number}>();await sql('DELETE FROM access_rate WHERE key IN (SELECT key FROM access_rate WHERE expires_at<? LIMIT 100)',t).run();if(r!.count>limit)throw new AccessError(429,'Rate limit reached. Please try again later.');}
 export async function audit(u:User,action:string,target:string,reason:string,metadata:unknown={}){const h=await headers();return sql('INSERT INTO access_audit (id,actor_id,target_id,action,reason,metadata,ip,device,created_at) VALUES (?,?,?,?,?,?,?,?,?)',crypto.randomUUID(),u.id,target,action,reason,JSON.stringify(metadata),h.get('cf-connecting-ip')?.slice(0,64)||null,h.get('user-agent')?.slice(0,300)||null,now())}
 export const notice=(id:string,message:string)=>sql('INSERT INTO access_notices (id,user_id,message,created_at) VALUES (?,?,?,?)',crypto.randomUUID(),id,message,now());
 // Guard rows have a CHECK constraint. A failed guard aborts the whole D1 batch.

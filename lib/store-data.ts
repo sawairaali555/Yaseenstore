@@ -24,7 +24,7 @@ export function flattenCategoryNames(tree: CategoryNode[] = []): string[] {
 
 export async function ensureCategoryTables() {
   const db = database();
-  if (!db) return null;
+  if (!db || (db as any).provider === 'supabase') return db;
   try {
     await db.prepare(`CREATE TABLE IF NOT EXISTS category_nodes (
       id TEXT PRIMARY KEY,
@@ -148,7 +148,7 @@ export async function updateCategoryTree(item: Partial<CategoryNode> & { id: str
 
 export async function ensureInventoryTables() {
   const db = database();
-  if (!db) return null;
+  if (!db || (db as any).provider === 'supabase') return db;
   try {
     await db.prepare(`CREATE TABLE IF NOT EXISTS inventory_logs (
       id TEXT PRIMARY KEY,
@@ -420,7 +420,7 @@ export const defaultSeedReturns: ReturnRequest[] = [
 
 export async function ensureReturnTables() {
   const db = database();
-  if (!db) return null;
+  if (!db || (db as any).provider === 'supabase') return db;
   try {
     await db.prepare(`CREATE TABLE IF NOT EXISTS return_requests (
       id TEXT PRIMARY KEY,
@@ -799,9 +799,9 @@ export const defaults: Settings = {
 };
 export function database(){return env.DB ?? null;}
 export async function catalog(all=false):Promise<ManagedProduct[]>{
-  const baseSeed = all ? [...seed, ...adminDemoProducts] : seed;
-  const merged=new Map<string,ManagedProduct>(baseSeed.map(p=>[p.id,{...p,status:p.status || 'Active'}]));
   const db=database();
+  const baseSeed = (db as any)?.provider === 'supabase' ? [] : all ? [...seed, ...adminDemoProducts] : seed;
+  const merged=new Map<string,ManagedProduct>(baseSeed.map(p=>[p.id,{...p,status:p.status || 'Active'}]));
   if(!db){
     if(all) return [...merged.values()];
     return (storefrontSnapshot.catalog as unknown as ManagedProduct[]).filter(p=>p.status==='Active');

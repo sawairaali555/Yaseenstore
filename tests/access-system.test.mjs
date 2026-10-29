@@ -409,3 +409,52 @@ test('CSV quoting preserves delimiters and neutralizes customer-supplied spreads
   assert.equal(csvCell('+923001234567'), '"\'+923001234567"');
   assert.equal(csvCell(-5), '-5');
 });
+
+test('standalone owner setup requires a server secret and cannot replace existing credentials', async () => {
+  const saved = { VERCEL: process.env.VERCEL, ADMIN_SETUP_TOKEN: process.env.ADMIN_SETUP_TOKEN };
+  try {
+    process.env.VERCEL = '1';
+    process.env.ADMIN_SETUP_TOKEN = 'ab'.repeat(32);
+    const h = harness(); h.d1.provider = 'supabase'; h.getCurrent().id = '';
+    const password = 'a unique owner passphrase 123';
+    const payload = { action: 'setup', setupKey: 'bad-key', password };
+    assert.equal((await h.call('session', payload)).status, 403);
+    assert.equal(h.db.prepare('SELECT count(*) n FROM access_users').get().n, 0);
+    assert.equal((await h.call('session', { ...payload, setupKey: process.env.ADMIN_SETUP_TOKEN })).status, 200);
+    const hash = h.db.prepare("SELECT hash FROM access_passwords WHERE user_id='owner'").get().hash;
+    assert.notEqual(hash, password);
+    assert.equal((await h.call('session', { ...payload, setupKey: process.env.ADMIN_SETUP_TOKEN, password: 'another unique password' })).status, 409);
+    assert.equal(h.db.prepare("SELECT hash FROM access_passwords WHERE user_id='owner'").get().hash, hash);
+    assert.equal((await h.call('session', { action: 'password-login', email: 'yaseenkhattak7@gmail.com', password })).status, 200);
+    assert.equal((await h.server.actor('settings.edit')).role, 'super_admin');
+    // The real identity helper rejects visitor-supplied gateway headers on Vercel.
+    h.getCurrent().id = 'forged';
+    assert.equal(await h.load('app/chatgpt-auth.ts').getChatGPTUser(), null);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test('Supabase guest checkout enforces prices and limits and exposes only token-protected tracking', async () => {
+  const h = harness();
+  const store = h.load('lib/store-data.ts');
+  await store.ensureInventoryTables(); await store.ensureCategoryTables();
+  h.d1.provider = 'supabase'; h.getCurrent().id = ''; h.setCookie('');
+  h.db.prepare("INSERT INTO access_users (id,email,name,role,status,created_at) VALUES ('storefront-guest','guest@store.invalid','Guest','member','active',?)").run(Date.now());
+  const product = stockProduct(); h.load('app/catalog.ts').products.push(product);
+  const api = h.load('app/api/orders/route.ts');
+  const payload = { name: 'Guest Buyer', phone: '03001234567', address: '123 Test Street', city: 'Lahore', checkoutRequestId: crypto.randomUUID(), items: [{ id: product.id, size: 'M', color: 'Red', qty: 1 }] };
+  const send = data => api.POST(new Request(ORIGIN + '/api/orders', { method: 'POST', headers: { origin: ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify(data) }));
+  assert.equal((await send({ ...payload, customDelivery: 0 })).status, 403);
+  const created = await send(payload), order = await created.json();
+  assert.equal(created.status, 201, JSON.stringify(order)); assert.equal(order.status, 'Pending'); assert.equal(order.total, 1750);
+  const duplicate = await send(payload); assert.equal((await duplicate.json()).duplicate, true);
+  assert.equal(h.db.prepare('SELECT count(*) n FROM orders').get().n, 1);
+  assert.equal((await send({ ...payload, phone: '03009999999' })).status, 409);
+  const lookup = token => api.GET(new Request(ORIGIN + '/api/orders?id=' + order.id + '&token=' + token));
+  assert.equal((await lookup('wrong')).status, 404);
+  const tracked = await (await lookup(order.token)).json();
+  assert.equal(tracked.id, order.id); assert.ok(tracked.createdAt); assert.equal(tracked.details, undefined); assert.equal(tracked.token, undefined);
+});

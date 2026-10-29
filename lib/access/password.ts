@@ -7,11 +7,12 @@ import {verify} from './mfa';
 import {emailConfig} from './email';
 import {User,has,ORIGIN} from './policy';
 import {database} from '@/lib/store-data';
+import {setupStandaloneOwner} from './standalone-setup';
 const password=z.string().min(15,'Use at least 15 characters.').max(128,'Use at most 128 characters.');
 const email=z.string().trim().toLowerCase().email().max(254);
 const code=z.string().max(6).optional();
 const clearCookie={'Set-Cookie':'__Host-zeliy_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'};
-async function limits(address:string,action:string){const h=await headers();await rate('ip:'+await digest(h.get('cf-connecting-ip')||'unknown'),action,25,900000);await rate('email:'+await digest(address),action,5,900000);}
+async function limits(address:string,action:string){const h=await headers();await rate('ip:'+await digest((process.env.VERCEL?(h.get('x-vercel-forwarded-for')||h.get('x-forwarded-for')):h.get('cf-connecting-ip'))||'unknown'),action,25,900000);await rate('email:'+await digest(address),action,5,900000);}
 async function mfa(u:User,otp?:string){const enabled=await sql('SELECT enabled FROM access_mfa WHERE user_id=?',u.id).first<any>();return enabled?.enabled?await verify(u,otp||''):guard('SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM access_mfa WHERE user_id=? AND enabled=1)',u.id);}
 function guard(query:string,...args:any[]){const id=crypto.randomUUID();return [sql('INSERT INTO access_guard (id,ok) SELECT ?,CASE WHEN EXISTS('+query+') THEN 1 ELSE 0 END',id,...args),sql('DELETE FROM access_guard WHERE id=?',id)];}
 function credentialGuard(u:User,hash:string){return guard('SELECT 1 FROM access_passwords WHERE user_id=? AND hash=?',u.id,hash);}
@@ -30,6 +31,10 @@ export async function passwordAction(data:any){
   return reply({ok:true,next:await blocked(u!.id,'mute')?'/admin/team':d.next},200,{'Set-Cookie':cookie});
  }
  if(action==='setup'){
+  if(process.env.VERCEL || process.env.AUTH_PROVIDER==='password'){
+   await limits('owner-setup','password-setup');
+   return reply(await setupStandaloneOwner(data),200,clearCookie);
+  }
   const d=z.object({password,code}).parse(data);
   // Only the verified owner of this exact account can enroll its FIRST password.
   const {identity,user:u}=await userRecord(false);await limits(identity.email,'password-setup');
