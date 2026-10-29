@@ -57,7 +57,7 @@ const fallbackTenant = (userId: string): Tenant => ({
 
 export async function ensureTenantTables() {
   const db = database();
-  if (!db) return null;
+  if (!db || (db as any).provider === 'supabase') return db;
   await db.prepare(`CREATE TABLE IF NOT EXISTS tenants (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,

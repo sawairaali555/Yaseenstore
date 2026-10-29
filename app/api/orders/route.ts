@@ -1,8 +1,7 @@
-import { actor, blocked, AccessError, fail, actorGuard, sql, origin } from '@/lib/access/server';
+import { actor, blocked, AccessError, fail, actorGuard, sql, origin, rate, body } from '@/lib/access/server';
 import { database, ensureInventoryTables, syncCategoryAvailability } from '@/lib/store-data';
-import { getDb } from '@/db';
-import { orders } from '@/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { checkoutIdentity } from '@/lib/access/checkout';
+import { digest } from '@/lib/access/crypto';
 import { effectivePrice } from '@/app/catalog';
 import { catalog, settings, deliveryFor } from '@/lib/store-data';
 import { z } from 'zod';
@@ -55,8 +54,8 @@ const schema = z.object({
 export async function POST(req: Request) {
   try {
     origin(req);
-    const user = await actor();
-    const tenant = await tenantForRequest(user, new URL(req.url).searchParams.get('tenant'));
+    const { user, guest } = await checkoutIdentity(req);
+    const tenant = guest ? { id: 'zeliy-pakistan' } : await tenantForRequest(user, new URL(req.url).searchParams.get('tenant'));
     if (await blocked(user.id, 'mute')) {
       throw new AccessError(403, 'Your account is restricted from placing orders.');
     }
@@ -64,7 +63,7 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Order payload is too large.' }, { status: 413 });
     }
 
-    const rawBody: any = await req.json().catch(() => ({}));
+    const rawBody: any = await body(req, 35000);
     if (rawBody && typeof rawBody.phone === 'string') {
       let p = rawBody.phone.replace(/[^\d+]/g, '').trim();
       if (/^03\d{9}$/.test(p)) p = '+92' + p.slice(1);
@@ -82,13 +81,18 @@ export async function POST(req: Request) {
     }
 
     const { items, ...details } = parsed.data;
+    if (guest) await rate('guest-phone:' + await digest(details.phone), 'checkout', 5, 3600000);
     if (details.checkoutRequestId) {
       const existing = await sql(
-        "SELECT id,token,total,status FROM orders WHERE json_extract(details, '$.tenantId')=? AND json_extract(details, '$.checkoutRequestId')=? LIMIT 1",
+        "SELECT id,token,total,status,details FROM orders WHERE json_extract(details, '$.tenantId')=? AND json_extract(details, '$.checkoutRequestId')=? LIMIT 1",
         tenant.id,
         details.checkoutRequestId,
-      ).first<{ id: string; token: string; total: number; status: string }>();
-      if (existing) return Response.json({ ...existing, duplicate: true });
+      ).first<{ id: string; token: string; total: number; status: string; details: string }>();
+      if (existing) {
+        if (guest && JSON.parse(existing.details).phone !== details.phone) throw new AccessError(409, 'Please refresh your bag and submit again.');
+        const { details: _privateDetails, ...result } = existing;
+        return Response.json({ ...result, duplicate: true }, { headers: { 'Cache-Control': 'no-store' } });
+      }
     }
     const managesOrders = has(user, 'orders.manage');
     if (!managesOrders && (
@@ -270,7 +274,7 @@ export async function POST(req: Request) {
     const orderDiscount = Math.min(subtotal, manualOrderDiscount + automaticPromotion.discount + couponDiscount);
     const deliveryCharge = details.customDelivery !== undefined ? details.customDelivery : deliveryFor(Math.max(0, subtotal - orderDiscount), config);
     const total = Math.max(0, subtotal + deliveryCharge - orderDiscount);
-    const initialStatus = details.status || (details.csrStatus === 'Confirmed' ? 'Picklist' : 'Test order received');
+    const initialStatus = details.status || (details.csrStatus === 'Confirmed' ? 'Picklist' : (database() as any)?.provider === 'supabase' ? 'Pending' : 'Test order received');
 
     const initialHistory = details.csrHistory || [
       {
@@ -404,12 +408,13 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
-    await actor();
+    if ((database() as any)?.provider !== 'supabase') await actor();
     const url = new URL(req.url);
     const id = url.searchParams.get('id') || '';
     const token = url.searchParams.get('token') || '';
     if (!id || !token) return Response.json({ error: 'Enter your order reference and tracking key.' }, { status: 400 });
-    const [order] = await getDb().select({ id: orders.id, total: orders.total, status: orders.status, createdAt: orders.createdAt }).from(orders).where(and(eq(orders.id, id), eq(orders.token, token))).limit(1);
+    if (id.length > 100 || token.length > 100) throw new AccessError(400, 'Check your order reference and tracking key.');
+    const order = await sql('SELECT id,total,status,created_at AS "createdAt" FROM orders WHERE id=? AND token=? LIMIT 1', id, token).first();
     if (!order) return Response.json({ error: 'Order not found. Check your reference and tracking key.' }, { status: 404 });
     return Response.json(order, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {

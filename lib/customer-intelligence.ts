@@ -12,7 +12,7 @@ export type CustomerProfileRecord = {
 
 export async function ensureCustomerIntelligenceTables() {
   const db = database();
-  if (!db) return null;
+  if (!db || (db as any).provider === 'supabase') return db;
   await db.prepare(`CREATE TABLE IF NOT EXISTS customer_profiles (
     tenant_id TEXT NOT NULL,
     customer_key TEXT NOT NULL,
